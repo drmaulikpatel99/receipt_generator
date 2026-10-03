@@ -1,17 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { google } from "googleapis";
+import { Readable } from "stream";
 
 /**
  * Serverless API Route to upload/sync receipt .txt files into Google Drive
- * Fixed for Google Service Accounts (supportsAllDrives: true & drive scope)
+ * Fixed for Google Service Accounts (Readable stream & folder duplicate prevention)
  */
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const filename = body.filename;
-    const content = body.content;
-    const mimeType = body.mimeType;
-    const folderPath = body.folderPath || body.subfolderPath;
+    const content = body.content || "";
+    const mimeType = body.mimeType || "text/plain";
+    let folderPath: string[] = body.folderPath || body.subfolderPath || [];
 
     const clientEmail = process.env.GOOGLE_DRIVE_CLIENT_EMAIL;
     const privateKey = process.env.GOOGLE_DRIVE_PRIVATE_KEY?.replace(/\\n/g, "\n");
@@ -31,10 +32,7 @@ export async function POST(req: NextRequest) {
     const auth = new google.auth.JWT({
       email: clientEmail,
       key: privateKey,
-      scopes: [
-        "https://www.googleapis.com/auth/drive",
-        "https://www.googleapis.com/auth/drive.file",
-      ],
+      scopes: ["https://www.googleapis.com/auth/drive"],
     });
 
     const drive = google.drive({ version: "v3", auth });
@@ -73,10 +71,19 @@ export async function POST(req: NextRequest) {
       return folder.data.id!;
     }
 
-    // Traverse and create target folder path
+    // Determine starting parent folder
     let currentParent = parentFolderId;
+
+    // If GOOGLE_DRIVE_FOLDER_ID is set and folderPath starts with "Saved_Receipts",
+    // strip "Saved_Receipts" so we don't create a duplicate Saved_Receipts inside Saved_Receipts
+    if (currentParent && folderPath.length > 0 && folderPath[0].toLowerCase() === "saved_receipts") {
+      folderPath = folderPath.slice(1);
+    }
+
+    // Traverse and create target folder path
     if (folderPath && Array.isArray(folderPath)) {
       for (const folderName of folderPath) {
+        if (!folderName) continue;
         currentParent = await getOrCreateFolder(folderName, currentParent);
       }
     }
@@ -94,14 +101,16 @@ export async function POST(req: NextRequest) {
       includeItemsFromAllDrives: true,
     });
 
+    const media = {
+      mimeType: mimeType,
+      body: Readable.from([content]),
+    };
+
     if (existingFiles.data.files && existingFiles.data.files.length > 0) {
       const fileId = existingFiles.data.files[0].id!;
       await drive.files.update({
         fileId,
-        media: {
-          mimeType: mimeType || "text/plain",
-          body: content,
-        },
+        media,
         supportsAllDrives: true,
       });
       return NextResponse.json({ success: true, fileId, action: "updated" });
@@ -115,10 +124,7 @@ export async function POST(req: NextRequest) {
 
       const newFile = await drive.files.create({
         requestBody: fileMetadata,
-        media: {
-          mimeType: mimeType || "text/plain",
-          body: content,
-        },
+        media,
         fields: "id, webViewLink",
         supportsAllDrives: true,
       });
