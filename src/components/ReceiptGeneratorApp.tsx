@@ -274,16 +274,17 @@ export function ReceiptGeneratorApp() {
       const resp = await fetch("/api/drive/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ filename, content, subfolderPath }),
+        body: JSON.stringify({ filename, content, folderPath: subfolderPath }),
       });
       const resData = await resp.json();
-      if (resp.ok && resData.success) {
+      if (resp.ok && resData.success && !resData.simulated) {
         setDriveSyncStatus(`☁️ Google Drive: Synced ${filename}`);
       } else {
-        setDriveSyncStatus(`⚠️ Drive sync: ${resData.message || "Offline"}`);
+        const errMsg = resData.error || resData.message || "Google Drive credentials not set on Vercel";
+        setDriveSyncStatus(`⚠️ Drive sync: ${errMsg}`);
       }
-    } catch (e) {
-      setDriveSyncStatus("⚠️ Drive sync skipped (API offline)");
+    } catch (e: any) {
+      setDriveSyncStatus(`⚠️ Drive sync error: ${e.message || "Offline"}`);
     }
   };
 

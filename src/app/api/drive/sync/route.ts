@@ -7,21 +7,23 @@ import { google } from "googleapis";
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { filename, content, mimeType, folderPath } = body;
+    const filename = body.filename;
+    const content = body.content;
+    const mimeType = body.mimeType;
+    const folderPath = body.folderPath || body.subfolderPath;
 
     const clientEmail = process.env.GOOGLE_DRIVE_CLIENT_EMAIL;
     const privateKey = process.env.GOOGLE_DRIVE_PRIVATE_KEY?.replace(/\\n/g, "\n");
     const parentFolderId = process.env.GOOGLE_DRIVE_FOLDER_ID;
 
     if (!clientEmail || !privateKey) {
-      // Fallback response if credentials are not configured yet
       return NextResponse.json(
         {
-          success: true,
-          message: "Saved locally. (Configure GOOGLE_DRIVE_CLIENT_EMAIL in .env.local to enable cloud Drive sync)",
+          success: false,
           simulated: true,
+          error: "Google Drive sync not configured. Please set GOOGLE_DRIVE_CLIENT_EMAIL and GOOGLE_DRIVE_PRIVATE_KEY in Vercel environment variables.",
         },
-        { status: 200 }
+        { status: 400 }
       );
     }
 
