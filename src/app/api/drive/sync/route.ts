@@ -3,6 +3,7 @@ import { google } from "googleapis";
 
 /**
  * Serverless API Route to upload/sync receipt .txt files into Google Drive
+ * Fixed for Google Service Accounts (supportsAllDrives: true & drive scope)
  */
 export async function POST(req: NextRequest) {
   try {
@@ -30,7 +31,10 @@ export async function POST(req: NextRequest) {
     const auth = new google.auth.JWT({
       email: clientEmail,
       key: privateKey,
-      scopes: ["https://www.googleapis.com/auth/drive.file"],
+      scopes: [
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/drive.file",
+      ],
     });
 
     const drive = google.drive({ version: "v3", auth });
@@ -42,7 +46,13 @@ export async function POST(req: NextRequest) {
         q += ` and '${parentId}' in parents`;
       }
 
-      const res = await drive.files.list({ q, fields: "files(id, name)" });
+      const res = await drive.files.list({
+        q,
+        fields: "files(id, name)",
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
+      });
+
       if (res.data.files && res.data.files.length > 0) {
         return res.data.files[0].id!;
       }
@@ -58,6 +68,7 @@ export async function POST(req: NextRequest) {
       const folder = await drive.files.create({
         requestBody: folderMetadata,
         fields: "id",
+        supportsAllDrives: true,
       });
       return folder.data.id!;
     }
@@ -75,7 +86,13 @@ export async function POST(req: NextRequest) {
     if (currentParent) {
       q += ` and '${currentParent}' in parents`;
     }
-    const existingFiles = await drive.files.list({ q, fields: "files(id, name)" });
+
+    const existingFiles = await drive.files.list({
+      q,
+      fields: "files(id, name)",
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
+    });
 
     if (existingFiles.data.files && existingFiles.data.files.length > 0) {
       const fileId = existingFiles.data.files[0].id!;
@@ -85,6 +102,7 @@ export async function POST(req: NextRequest) {
           mimeType: mimeType || "text/plain",
           body: content,
         },
+        supportsAllDrives: true,
       });
       return NextResponse.json({ success: true, fileId, action: "updated" });
     } else {
@@ -94,6 +112,7 @@ export async function POST(req: NextRequest) {
       if (currentParent) {
         fileMetadata.parents = [currentParent];
       }
+
       const newFile = await drive.files.create({
         requestBody: fileMetadata,
         media: {
@@ -101,7 +120,9 @@ export async function POST(req: NextRequest) {
           body: content,
         },
         fields: "id, webViewLink",
+        supportsAllDrives: true,
       });
+
       return NextResponse.json({
         success: true,
         fileId: newFile.data.id,
