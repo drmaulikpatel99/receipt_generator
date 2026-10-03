@@ -14,10 +14,13 @@ import {
   Printer,
   Share2,
   Sparkles,
+  Settings,
+  Lock,
 } from "lucide-react";
 import {
   fetchPaymentsByDateRange,
   SupabasePaymentRecord,
+  getCurrentUser,
 } from "@/lib/supabase";
 import {
   loadLocalStatus,
@@ -40,6 +43,7 @@ import {
   toSortableDate,
 } from "@/lib/utils";
 import { YearlySummaryModal } from "./YearlySummaryModal";
+import { SettingsAuthModal } from "./SettingsAuthModal";
 
 const MONTH_NAMES = [
   "", "January", "February", "March", "April", "May", "June",
@@ -74,9 +78,24 @@ export function ReceiptGeneratorApp() {
   const [statusMsg, setStatusMsg] = useState<string>("Ready");
 
   const [isFYModalOpen, setIsFYModalOpen] = useState<boolean>(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
+  const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null);
+
   const [driveSyncStatus, setDriveSyncStatus] = useState<string>("");
 
-  // Load patient data from Supabase (Strictly Read-Only)
+  // Check auth user on mount
+  useEffect(() => {
+    getCurrentUser().then((user) => {
+      if (user?.email) {
+        setCurrentUserEmail(user.email);
+      } else {
+        const localEmail = typeof window !== "undefined" ? localStorage.getItem("sb_email") : null;
+        setCurrentUserEmail(localEmail || null);
+      }
+    });
+  }, []);
+
+  // Load patient data from Supabase
   const handleLoadData = async (from: string, to: string) => {
     setIsLoading(true);
     setStatusMsg("⏳ Fetching records from database...");
@@ -99,7 +118,13 @@ export function ReceiptGeneratorApp() {
       setStatusMsg(`Loaded ${data.length} records • (${from} → ${to})`);
     } catch (err: any) {
       console.error(err);
-      setStatusMsg("❌ Error fetching data");
+      const errText = err.message || String(err);
+      if (errText.includes("row-level security") || errText.includes("JWT") || errText.includes("401") || errText.includes("403")) {
+        setStatusMsg("❌ Auth Required. Please log in in Settings ⚙️");
+        setIsSettingsOpen(true);
+      } else {
+        setStatusMsg(`❌ Error: ${errText}`);
+      }
     } finally {
       setIsLoading(false);
     }
@@ -108,6 +133,18 @@ export function ReceiptGeneratorApp() {
   useEffect(() => {
     handleLoadData(todayYMD, todayYMD);
   }, []);
+
+  const refreshAuthUser = () => {
+    getCurrentUser().then((user) => {
+      if (user?.email) {
+        setCurrentUserEmail(user.email);
+      } else {
+        const localEmail = typeof window !== "undefined" ? localStorage.getItem("sb_email") : null;
+        setCurrentUserEmail(localEmail || null);
+      }
+    });
+    handleLoadData(fromYMD, toYMD);
+  };
 
   // Quick Date Range Selectors
   const setQuickToday = () => {
@@ -148,55 +185,58 @@ export function ReceiptGeneratorApp() {
     setRowStates((prev) => {
       const current = prev[pid] || { amountStr: "", printed: false };
       const nextPrinted = !current.printed;
-      let nextAmtStr = current.amountStr;
+      const nextAmtStr = nextPrinted ? String(Math.round(totalCharges)) : current.amountStr;
 
-      if (!isUpi) {
-        if (nextPrinted) {
-          nextAmtStr = String(Math.round(totalCharges));
-        } else {
-          nextAmtStr = "";
-        }
-      }
+      const updated = { ...prev, [pid]: { amountStr: nextAmtStr, printed: nextPrinted } };
 
-      saveLocalStatus(pid, nextAmtStr ? Number(nextAmtStr) : null, nextPrinted);
-      return { ...prev, [pid]: { amountStr: nextAmtStr, printed: nextPrinted } };
+      const amtNum = nextAmtStr ? Number(nextAmtStr) : null;
+      saveLocalStatus(pid, amtNum, nextPrinted);
+
+      return updated;
     });
   };
 
-  // Handle Manual Cash Entry input
+  // Update Manual Amount
   const handleAmountChange = (pid: string, val: string) => {
     setRowStates((prev) => {
       const current = prev[pid] || { amountStr: "", printed: false };
-      saveLocalStatus(pid, val ? Number(val) : null, current.printed);
-      return { ...prev, [pid]: { ...current, amountStr: val } };
+      const updated = { ...prev, [pid]: { ...current, amountStr: val } };
+
+      const amtNum = val ? Number(val) : null;
+      saveLocalStatus(pid, amtNum, current.printed);
+
+      return updated;
     });
   };
 
-  // Process Rows & Grouping
-  const normalRecords = rawRecords.filter((r) => !r.is_advance_booking);
-  const upiAdvRecords = rawRecords.filter(
-    (r) =>
-      r.is_advance_booking &&
-      isUpiMode((r.collected_mode || "") + " " + (r.collected_mode2 || ""))
-  );
-
-  // Group UPI Advance Bookings Date-Wise
+  // Separate normal records vs advance records
+  const normalRecords: SupabasePaymentRecord[] = [];
   const advByDate: Record<string, SupabasePaymentRecord[]> = {};
-  upiAdvRecords.forEach((r) => {
-    const cd = String(r.collected_date || "").replace(/\//g, "-").trim() || "—";
-    if (!advByDate[cd]) advByDate[cd] = [];
-    advByDate[cd].push(r);
+
+  rawRecords.forEach((r) => {
+    const isAdv = Boolean(r.is_advance_booking);
+    const modeStr = (r.collected_mode || "") + " " + (r.collected_mode2 || "");
+    const isUpi = isUpiMode(modeStr);
+
+    if (isAdv && isUpi) {
+      const d = r.collected_date || "Unknown Date";
+      if (!advByDate[d]) advByDate[d] = [];
+      advByDate[d].push(r);
+    } else {
+      normalRecords.push(r);
+    }
   });
 
-  const sortedAdvDates = Object.keys(advByDate).sort((a, b) =>
-    toSortableDate(a).localeCompare(toSortableDate(b))
-  );
+  const sortedAdvDates = Object.keys(advByDate).sort((a, b) => (a > b ? -1 : 1));
 
-  // Compute Totals
+  // Compute Statistics
+  let patientCount = normalRecords.length;
+  sortedAdvDates.forEach((d) => (patientCount += advByDate[d].length));
+
   let upiTotal = 0;
   let cashTotal = 0;
-  let patientCount = normalRecords.length;
 
+  // Process Normal Records stats
   normalRecords.forEach((r) => {
     const pid = String(r.id);
     const modeStr = (r.collected_mode || "") + " " + (r.collected_mode2 || "");
@@ -207,43 +247,43 @@ export function ReceiptGeneratorApp() {
     let amt = 0;
     if (isUpi || state.printed) {
       amt = totalCharges;
-    } else if (state.amountStr) {
-      amt = Number(state.amountStr) || 0;
+    } else if (state.amountStr && Number(state.amountStr) > 0) {
+      amt = Number(state.amountStr);
     }
 
     if (isUpi) upiTotal += amt;
     else cashTotal += amt;
   });
 
+  // Process Advance Booking groups stats
   sortedAdvDates.forEach((dStr) => {
     const group = advByDate[dStr];
-    const groupTotal = group.reduce(
+    const total = group.reduce(
       (acc, curr) => acc + (curr.collected_today || 0) + (curr.collected_today2 || 0),
       0
     );
-    upiTotal += groupTotal;
-    patientCount += 1;
+    upiTotal += total;
   });
 
   const grandTotal = upiTotal + cashTotal;
 
-  // Google Drive Sync API Call Helper
-  const syncToDrive = async (filename: string, content: string, path: string[]) => {
+  // Helper: Auto-sync generated text reports to Google Drive API
+  const syncToDrive = async (filename: string, content: string, subfolderPath: string[] = []) => {
     try {
-      setDriveSyncStatus("⏳ Syncing to Google Drive...");
-      const res = await fetch("/api/drive/sync", {
+      setDriveSyncStatus(`☁️ Syncing ${filename}...`);
+      const resp = await fetch("/api/drive/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ filename, content, folderPath: path }),
+        body: JSON.stringify({ filename, content, subfolderPath }),
       });
-      const data = await res.json();
-      if (data.success) {
-        setDriveSyncStatus(`✅ Google Drive: ${data.message || "Synced"}`);
+      const resData = await resp.json();
+      if (resp.ok && resData.success) {
+        setDriveSyncStatus(`☁️ Google Drive: Synced ${filename}`);
       } else {
-        setDriveSyncStatus(`⚠️ Drive Sync: ${data.error || "Failed"}`);
+        setDriveSyncStatus(`⚠️ Drive sync: ${resData.message || "Offline"}`);
       }
     } catch (e) {
-      setDriveSyncStatus("⚠️ Drive Sync Error");
+      setDriveSyncStatus("⚠️ Drive sync skipped (API offline)");
     }
   };
 
@@ -319,18 +359,35 @@ export function ReceiptGeneratorApp() {
       upiN += group.length;
     });
 
-    const dateLabel = fromYMD === toYMD ? formatDateDMY(parseYMD(fromYMD)) : `${formatDateDMY(parseYMD(fromYMD))}_to_${formatDateDMY(parseYMD(toYMD))}`;
-    const fromD = parseYMD(fromYMD);
-    const monthName = MONTH_NAMES[fromD.getMonth() + 1];
-    const yearStr = String(fromD.getFullYear());
-
+    const dateLabel = formatDateDMY(parseYMD(fromYMD));
     saveBillsToStore(dateLabel, savedItems);
 
-    const daySummary: DaySummary = {
-      period: fromYMD === toYMD ? formatDateDMY(fromD) : `${formatDateDMY(fromD)} to ${formatDateDMY(parseYMD(toYMD))}`,
+    const firstDateObj = parseYMD(fromYMD);
+    const yearStr = String(firstDateObj.getFullYear());
+    const monthName = MONTH_NAMES[firstDateObj.getMonth() + 1];
+
+    // Generate individual receipts
+    savedItems.forEach((item) => {
+      if (item.is_advance_group) return;
+      const receiptTxt = generatePatientTextReceipt(item);
+      const sanName = item.patient_name.replace(/[^a-z0-9]/gi, "_").substring(0, 20);
+      const filename = `Receipt_${item.payment_id}_${sanName}.txt`;
+
+      syncToDrive(filename, receiptTxt, [
+        "Saved_Receipts",
+        yearStr,
+        monthName,
+        dateLabel,
+        "Individual_Receipts",
+      ]);
+    });
+
+    // Generate Daily Summary Report
+    const daySummaryObj: DaySummary = {
+      period: dateLabel,
       saved_at: new Date().toLocaleString(),
       totals: {
-        total_patients: savedItems.length,
+        total_patients: upiN + cashN,
         upi_patients: upiN,
         cash_patients: cashN,
         upi_amount: upiT,
@@ -339,30 +396,55 @@ export function ReceiptGeneratorApp() {
       },
       records: savedItems,
     };
+    const daySummaryTxt = generateDailyTextReport(daySummaryObj);
+    const summaryFilename = `summary_${dateLabel}.txt`;
+    syncToDrive(summaryFilename, daySummaryTxt, ["Saved_Receipts", yearStr, monthName, dateLabel]);
 
-    // Generate .txt contents
-    const dailyTxt = generateDailyTextReport(daySummary);
+    // Update Monthly Summary Report
+    const allStore = loadSavedBillsStore();
+    const monthlyItemsMap: Record<string, SavedReceiptItem> = {};
 
-    // Sync to Google Drive
-    await syncToDrive(`summary_${dateLabel}.txt`, dailyTxt, [
-      "Saved_Receipts",
-      yearStr,
-      monthName,
-      dateLabel,
-    ]);
+    Object.keys(allStore).forEach((dateKey) => {
+      const parts = dateKey.split("-");
+      if (parts.length === 3) {
+        const dNum = parseInt(parts[0], 10);
+        const mNum = parseInt(parts[1], 10);
+        const yNum = parseInt(parts[2], 10);
 
-    // Sync individual receipts to Google Drive
-    for (const item of savedItems) {
-      const pTxt = generatePatientTextReceipt(item);
-      const cleanName = (item.patient_name || "").replace(/[^a-zA-Z0-9_]/g, "_").slice(0, 20);
-      const fName = `Receipt_${item.payment_id}_${cleanName}.txt`;
-      await syncToDrive(fName, pTxt, [
-        "Saved_Receipts",
-        yearStr,
-        monthName,
-        dateLabel,
-        "Individual_Receipts",
-      ]);
+        if (mNum === firstDateObj.getMonth() + 1 && yNum === firstDateObj.getFullYear()) {
+          allStore[dateKey].forEach((item) => {
+            monthlyItemsMap[`${dateKey}_${item.payment_id}`] = item;
+          });
+        }
+      }
+    });
+
+    const monthlyItemsList = Object.values(monthlyItemsMap);
+    if (monthlyItemsList.length > 0) {
+      let mUpiT = 0, mCashT = 0, mUpiN = 0, mCashN = 0;
+      monthlyItemsList.forEach((it) => {
+        if (isUpiMode(it.payment_mode)) { mUpiT += it.receipt_amount; mUpiN += 1; }
+        else { mCashT += it.receipt_amount; mCashN += 1; }
+      });
+
+      const monthlySummaryObj: MonthlySummaryData = {
+        year: firstDateObj.getFullYear(),
+        month: monthName,
+        last_updated: new Date().toLocaleString(),
+        days: {},
+        monthly_totals: {
+          total_days_saved: 1,
+          total_patients: mUpiN + mCashN,
+          upi_patients: mUpiN,
+          cash_patients: mCashN,
+          upi_amount: mUpiT,
+          cash_amount: mCashT,
+          grand_total: mUpiT + mCashT,
+        },
+      };
+      const mSummaryTxt = generateMonthlyTextReport(monthlySummaryObj);
+      const monthlyFilename = `Monthly_Summary_${monthName}_${yearStr}.txt`;
+      syncToDrive(monthlyFilename, mSummaryTxt, ["Saved_Receipts", yearStr, monthName]);
     }
 
     alert(`✅ Saved ${savedItems.length} receipt(s) to storage!\nAuto-synced reports to Google Drive.`);
@@ -372,18 +454,36 @@ export function ReceiptGeneratorApp() {
   return (
     <div className="min-h-screen flex flex-col">
       {/* ── Top Header ────────────────────────────────────────────────── */}
-      <header className="bg-blue-700 text-white shadow-lg py-3.5 px-6 flex flex-wrap items-center justify-between gap-4">
+      <header className="bg-[#0E6655] text-white shadow-lg py-3.5 px-6 flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <div className="bg-white/10 p-2 rounded-xl backdrop-blur-md">
-            <Sparkles className="w-7 h-7 text-blue-200" />
+            <Sparkles className="w-7 h-7 text-teal-200" />
           </div>
           <div>
             <h1 className="text-xl font-bold tracking-tight">Babyscan Clinic</h1>
-            <p className="text-xs text-blue-200 font-medium">Cloud Receipt Generator & Analytics</p>
+            <p className="text-xs text-teal-200 font-medium">Cloud Receipt Generator & Analytics</p>
           </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {/* Settings & Admin Login Button */}
+          <button
+            onClick={() => setIsSettingsOpen(true)}
+            className="flex items-center gap-2 bg-teal-800 hover:bg-teal-900 text-white text-xs font-bold px-3 py-2 rounded-xl shadow transition border border-teal-600/50"
+          >
+            <Settings className="w-4 h-4 text-teal-200" />
+            {currentUserEmail ? (
+              <span className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                <span className="hidden sm:inline max-w-[140px] truncate">{currentUserEmail}</span>
+              </span>
+            ) : (
+              <span className="flex items-center gap-1 text-amber-300">
+                <Lock className="w-3.5 h-3.5" /> Login ⚙️
+              </span>
+            )}
+          </button>
+
           <button
             onClick={handleSaveBills}
             className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-3.5 py-2 rounded-xl shadow transition"
@@ -434,7 +534,7 @@ export function ReceiptGeneratorApp() {
               <button
                 key={b.label}
                 onClick={b.fn}
-                className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-3 py-1.5 rounded-lg shadow-sm transition"
+                className="bg-[#0E6655] hover:bg-teal-800 text-white text-xs font-bold px-3 py-1.5 rounded-lg shadow-sm transition"
               >
                 {b.label}
               </button>
@@ -445,7 +545,7 @@ export function ReceiptGeneratorApp() {
         <button
           onClick={() => handleLoadData(fromYMD, toYMD)}
           disabled={isLoading}
-          className="flex items-center gap-2 bg-blue-700 hover:bg-blue-800 text-white text-xs font-bold px-4 py-2 rounded-xl shadow transition disabled:opacity-50"
+          className="flex items-center gap-2 bg-[#0E6655] hover:bg-teal-800 text-white text-xs font-bold px-4 py-2 rounded-xl shadow transition disabled:opacity-50"
         >
           <Search className="w-4 h-4" /> Load Patients
         </button>
@@ -456,7 +556,7 @@ export function ReceiptGeneratorApp() {
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-6 text-center flex-1 max-w-3xl">
           <div className="bg-white p-2.5 rounded-xl border border-sky-100 shadow-sm">
             <p className="text-[11px] font-semibold text-slate-400 uppercase">Patients</p>
-            <p className="text-lg font-black text-blue-700">{patientCount}</p>
+            <p className="text-lg font-black text-[#0E6655]">{patientCount}</p>
           </div>
           <div className="bg-white p-2.5 rounded-xl border border-sky-100 shadow-sm">
             <p className="text-[11px] font-semibold text-slate-400 uppercase">UPI Total</p>
@@ -478,38 +578,39 @@ export function ReceiptGeneratorApp() {
       </section>
 
       {/* ── Main Patient Table ────────────────────────────────────────── */}
-      <main className="flex-1 p-4 md:p-6 overflow-auto">
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-          <table className="w-full text-left border-collapse text-sm">
-            <thead className="bg-blue-700 text-white text-xs uppercase font-bold sticky top-0">
-              <tr>
-                <th className="py-3 px-4 w-12 text-center">#</th>
-                <th className="py-3 px-4">Date</th>
-                <th className="py-3 px-4">Patient Name</th>
-                <th className="py-3 px-4">Scan Type</th>
-                <th className="py-3 px-4 text-center">Mode</th>
-                <th className="py-3 px-4 text-right">Total Charges ₹</th>
-                <th className="py-3 px-4 text-center">Bill Printed</th>
-                <th className="py-3 px-4 text-center">Receipt Amount ₹</th>
+      <main className="flex-1 p-6 max-w-7xl w-full mx-auto">
+        <div className="bg-white rounded-2xl shadow-md border border-slate-200 overflow-hidden">
+          <table className="w-full text-left border-collapse">
+            <thead>
+              <tr className="bg-slate-100 border-b border-slate-200 text-xs font-bold text-slate-600 uppercase">
+                <th className="py-3.5 px-4">Date</th>
+                <th className="py-3.5 px-4">Patient Name</th>
+                <th className="py-3.5 px-4">Scan Description</th>
+                <th className="py-3.5 px-4 text-center">Mode</th>
+                <th className="py-3.5 px-4 text-right">Total Charges</th>
+                <th className="py-3.5 px-4 text-center">Bill Printed?</th>
+                <th className="py-3.5 px-4 text-center">Receipt Amount (₹)</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100 font-medium">
+
+            <tbody className="divide-y divide-slate-100 text-sm">
               {isLoading ? (
                 <tr>
-                  <td colSpan={8} className="py-12 text-center text-blue-600 font-bold">
-                    ⏳ Fetching records from database...
+                  <td colSpan={7} className="py-12 text-center text-slate-500 font-semibold">
+                    <Clock className="w-6 h-6 animate-spin mx-auto mb-2 text-[#0E6655]" />
+                    Loading patient records...
                   </td>
                 </tr>
-              ) : normalRecords.length === 0 && sortedAdvDates.length === 0 ? (
+              ) : rawRecords.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-12 text-center text-slate-400 font-medium">
-                    No payments found for the selected date period
+                  <td colSpan={7} className="py-12 text-center text-slate-400 font-medium">
+                    No payment records found for selected date range.
                   </td>
                 </tr>
               ) : (
                 <>
-                  {/* Normal Patient Rows */}
-                  {normalRecords.map((r, idx) => {
+                  {/* Normal Payment Rows */}
+                  {normalRecords.map((r) => {
                     const pid = String(r.id);
                     const modeStr = (r.collected_mode || "") + " " + (r.collected_mode2 || "");
                     const isUpi = isUpiMode(modeStr);
@@ -517,61 +618,62 @@ export function ReceiptGeneratorApp() {
                     const totalCharges = (r.collected_today || 0) + (r.collected_today2 || 0);
 
                     const isAdvance = Boolean(r.is_advance_booking);
-                    const origScan = isAdvance ? "Advance for Appointment" : cleanScanDescription(r.scan_description);
+                    const origScan = isAdvance
+                      ? "Advance for Appointment"
+                      : cleanScanDescription(r.scan_description);
 
-                    const editable = !isUpi && !state.printed;
-                    const hasManualAmt = Boolean(state.amountStr && Number(state.amountStr) > 0);
-                    const activeScan = !isUpi && !state.printed && hasManualAmt ? "Fetal Well Being" : origScan;
-
-                    const rowBg = isUpi || state.printed ? "bg-emerald-50/70" : "bg-amber-50/70";
-
-                    let displayAmt = "";
-                    if (isUpi || state.printed) {
-                      displayAmt = String(Math.round(totalCharges));
-                    } else {
-                      displayAmt = state.amountStr;
-                    }
+                    const rowBgClass =
+                      isUpi || state.printed
+                        ? "bg-emerald-50/60 hover:bg-emerald-100/50"
+                        : "bg-amber-50/50 hover:bg-amber-100/40";
 
                     return (
-                      <tr key={pid} className={`${rowBg} hover:bg-slate-100/80 transition`}>
-                        <td className="py-3 px-4 text-center text-slate-400 text-xs font-mono">{idx + 1}</td>
-                        <td className="py-3 px-4 text-slate-600 text-xs font-semibold">{r.collected_date || "—"}</td>
-                        <td className="py-3 px-4 font-bold text-indigo-950">{r.patient_name || "—"}</td>
-                        <td className="py-3 px-4 text-slate-700 font-semibold">{activeScan}</td>
-                        <td className="py-3 px-4 text-center">
+                      <tr key={pid} className={`${rowBgClass} transition`}>
+                        <td className="py-3.5 px-4 text-xs font-semibold text-slate-500">
+                          {r.collected_date || "—"}
+                        </td>
+                        <td className="py-3.5 px-4 font-bold text-slate-900">{r.patient_name || "—"}</td>
+                        <td className="py-3.5 px-4 text-slate-700 font-medium">{origScan}</td>
+                        <td className="py-3.5 px-4 text-center">
                           <span
-                            className={`px-2 py-0.5 rounded-full text-xs font-black ${
-                              isUpi ? "bg-emerald-200 text-emerald-900" : "bg-amber-200 text-amber-900"
+                            className={`px-2.5 py-1 rounded-full text-xs font-extrabold ${
+                              isUpi ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"
                             }`}
                           >
-                            {r.collected_mode || "—"}
+                            {r.collected_mode || "Cash"}
                           </span>
                         </td>
-                        <td className="py-3 px-4 text-right font-bold text-slate-700">
+                        <td className="py-3.5 px-4 text-right font-bold text-slate-800">
                           ₹{Math.round(totalCharges).toLocaleString()}
                         </td>
-                        <td className="py-3 px-4 text-center">
-                          <button
-                            onClick={() => handleTogglePrinted(pid, isUpi, totalCharges)}
-                            className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold text-white transition shadow-sm ${
-                              state.printed ? "bg-emerald-600 hover:bg-emerald-700" : "bg-rose-500 hover:bg-rose-600"
-                            }`}
-                          >
-                            {state.printed ? <CheckCircle2 className="w-3.5 h-3.5" /> : <XCircle className="w-3.5 h-3.5" />}
-                            {state.printed ? "Printed" : "Not Printed"}
-                          </button>
+                        <td className="py-3.5 px-4 text-center">
+                          {!isUpi ? (
+                            <button
+                              onClick={() => handleTogglePrinted(pid, isUpi, totalCharges)}
+                              className="focus:outline-none hover:scale-110 transition active:scale-95"
+                              title="Toggle Bill Printed Status"
+                            >
+                              {state.printed ? (
+                                <CheckCircle2 className="w-6 h-6 text-emerald-600 inline-block" />
+                              ) : (
+                                <XCircle className="w-6 h-6 text-slate-300 inline-block" />
+                              )}
+                            </button>
+                          ) : (
+                            <span className="text-slate-400 text-xs font-medium">N/A (UPI)</span>
+                          )}
                         </td>
-                        <td className="py-3 px-4 text-center">
+                        <td className="py-3.5 px-4 text-center">
                           <input
                             type="text"
-                            value={displayAmt}
-                            readOnly={!editable}
-                            placeholder={editable ? "Enter amount" : ""}
+                            value={state.amountStr}
                             onChange={(e) => handleAmountChange(pid, e.target.value)}
-                            className={`w-28 text-center py-1 rounded-lg font-bold text-sm border ${
-                              !editable
+                            disabled={isUpi || state.printed}
+                            placeholder={isUpi || state.printed ? String(Math.round(totalCharges)) : "Manual ₹"}
+                            className={`w-28 text-center py-1 rounded-lg font-bold text-sm border outline-none transition ${
+                              isUpi || state.printed
                                 ? "bg-emerald-100/60 border-emerald-300 text-emerald-900 cursor-not-allowed"
-                                : "bg-white border-amber-300 text-slate-900 focus:ring-2 focus:ring-amber-500 outline-none"
+                                : "bg-white border-amber-300 focus:ring-2 focus:ring-amber-500 text-slate-900 shadow-xs"
                             }`}
                           />
                         </td>
@@ -579,24 +681,23 @@ export function ReceiptGeneratorApp() {
                     );
                   })}
 
-                  {/* Advance Bookings Section (Grouped Date-Wise) */}
+                  {/* Date-wise Grouped Advance Payments */}
                   {sortedAdvDates.length > 0 && (
                     <>
-                      <tr className="bg-blue-700 text-white font-bold text-xs">
-                        <td colSpan={8} className="py-2 px-4 uppercase tracking-wider">
-                          💳 Advance for Appointment ({upiAdvRecords.length} booking(s) • UPI)
+                      <tr className="bg-indigo-100/70 text-indigo-900 text-xs font-bold uppercase tracking-wider">
+                        <td colSpan={7} className="py-2.5 px-4">
+                          📅 Advance Bookings Grouped Date-wise ({sortedAdvDates.length} date groups)
                         </td>
                       </tr>
-                      {sortedAdvDates.map((dStr, idx) => {
+                      {sortedAdvDates.map((dStr) => {
                         const group = advByDate[dStr];
                         const groupTotal = group.reduce(
                           (acc, curr) => acc + (curr.collected_today || 0) + (curr.collected_today2 || 0),
                           0
                         );
                         return (
-                          <tr key={`adv_${dStr}`} className="bg-emerald-50/90 font-medium border-t border-emerald-200">
-                            <td className="py-3 px-4 text-center text-slate-400 text-xs font-mono">{idx + 1}</td>
-                            <td className="py-3 px-4 text-slate-600 text-xs font-bold">{dStr}</td>
+                          <tr key={`adv_${dStr}`} className="bg-indigo-50/60 hover:bg-indigo-100/50 transition">
+                            <td className="py-3 px-4 text-xs font-bold text-indigo-800">{dStr}</td>
                             <td className="py-3 px-4 font-bold text-indigo-950">
                               Advance for Appointment ({group.length} booking(s))
                             </td>
@@ -641,6 +742,18 @@ export function ReceiptGeneratorApp() {
         isOpen={isFYModalOpen}
         onClose={() => setIsFYModalOpen(false)}
         onSyncDrive={(filename, content, path) => syncToDrive(filename, content, path)}
+      />
+
+      {/* ── Settings & Admin Login Modal ─────────────────────────────── */}
+      <SettingsAuthModal
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        onAuthSuccess={refreshAuthUser}
+        currentUserEmail={currentUserEmail}
+        onLogout={() => {
+          setCurrentUserEmail(null);
+          handleLoadData(fromYMD, toYMD);
+        }}
       />
     </div>
   );

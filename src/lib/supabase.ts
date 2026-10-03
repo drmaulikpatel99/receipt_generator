@@ -1,9 +1,19 @@
 import { createClient } from "@supabase/supabase-js";
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "https://frtfzjchlaraywdmlhdb.supabase.co";
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZydGZ6amNobGFyYXl3ZG1saGRiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg3MTI4ODgsImV4cCI6MjEwNDI4ODg4OH0.gdD62zBhe8jSUSGXapq1tLd84S6OAXMgqJUji-_RFw4";
+const defaultUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "https://frtfzjchlaraywdmlhdb.supabase.co";
+const defaultAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZydGZ6amNobGFyYXl3ZG1saGRiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg3MTI4ODgsImV4cCI6MjEwNDI4ODg4OH0.gdD62zBhe8jSUSGXapq1tLd84S6OAXMgqJUji-_RFw4";
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+export const getSavedConfig = () => {
+  if (typeof window !== "undefined") {
+    const url = localStorage.getItem("sb_url") || defaultUrl;
+    const key = localStorage.getItem("sb_key") || defaultAnonKey;
+    return { url, key };
+  }
+  return { url: defaultUrl, key: defaultAnonKey };
+};
+
+const { url, key } = getSavedConfig();
+export const supabase = createClient(url, key);
 
 export interface SupabasePaymentRecord {
   id: number | string;
@@ -22,7 +32,37 @@ export interface SupabasePaymentRecord {
 }
 
 /**
- * STRICTLY READ-ONLY query: Fetch payments from Supabase PostgREST API
+ * Native Supabase Email & Password Login (identical to Baby_Scan_Data.html)
+ */
+export async function loginWithSupabase(email: string, pass: string) {
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email: email.trim(),
+    password: pass.trim(),
+  });
+  if (error) throw error;
+  if (typeof window !== "undefined") {
+    localStorage.setItem("sb_email", email.trim());
+  }
+  return data;
+}
+
+/**
+ * Sign out current authenticated user
+ */
+export async function logoutSupabase() {
+  await supabase.auth.signOut();
+}
+
+/**
+ * Get current session user
+ */
+export async function getCurrentUser() {
+  const { data } = await supabase.auth.getUser();
+  return data?.user || null;
+}
+
+/**
+ * Fetch payments from Supabase PostgREST API
  */
 export async function fetchPaymentsByDateRange(
   fromYMD: string,
@@ -76,6 +116,6 @@ export async function fetchPaymentsByDateRange(
     return records;
   } catch (err) {
     console.error("Failed to fetch payments from Supabase:", err);
-    return [];
+    throw err;
   }
 }
