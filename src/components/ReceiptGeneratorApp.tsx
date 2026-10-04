@@ -5,6 +5,7 @@ import {
   Calendar,
   Save,
   BarChart3,
+  Search,
   CheckCircle2,
   XCircle,
   Clock,
@@ -81,12 +82,29 @@ export function ReceiptGeneratorApp() {
     try {
       const rawData = await fetchPaymentsByDateRange(from, to);
 
-      // Financial Filter: Exclude appointment-only entries with ₹0 payment/advance collected
+      // Financial Filter: Exclude ₹0 payment entries and Cash Advance Appointments
       const data = rawData.filter((r) => {
         const c1 = Number(r.collected_today || 0);
         const c2 = Number(r.collected_today2 || 0);
         const adv = Number((r as any).advance_amount || 0);
-        return (c1 + c2 + adv) > 0;
+
+        // 1. Exclude ₹0 payment entries
+        if (c1 + c2 + adv === 0) return false;
+
+        // 2. Detect Advance Appointment
+        const isAdvance =
+          Boolean(r.is_advance_booking) ||
+          String(r.scan_description || "").toLowerCase().includes("advance");
+
+        const modeStr = (r.collected_mode || "") + " " + (r.collected_mode2 || "");
+        const isUpi = isUpiMode(modeStr);
+
+        // 3. Exclude Advance for Appointment paid in Cash
+        if (isAdvance && !isUpi) {
+          return false;
+        }
+
+        return true;
       });
 
       setRawRecords(data);
@@ -118,10 +136,10 @@ export function ReceiptGeneratorApp() {
     }
   };
 
-  // Auto-fetch data whenever fromYMD or toYMD changes
+  // Initial load on mount only (for Today)
   useEffect(() => {
-    handleLoadData(fromYMD, toYMD);
-  }, [fromYMD, toYMD]);
+    handleLoadData(todayYMD, todayYMD);
+  }, []);
 
   const refreshAuthUser = () => {
     getCurrentUser().then((user) => {
@@ -139,6 +157,7 @@ export function ReceiptGeneratorApp() {
   const setQuickToday = () => {
     const d = formatDateYMD(new Date());
     setFromYMD(d); setToYMD(d);
+    handleLoadData(d, d);
   };
 
   const setQuickYesterday = () => {
@@ -146,21 +165,26 @@ export function ReceiptGeneratorApp() {
     prev.setDate(prev.getDate() - 1);
     const d = formatDateYMD(prev);
     setFromYMD(d); setToYMD(d);
+    handleLoadData(d, d);
   };
 
   const setQuickLast7 = () => {
     const end = new Date();
     const start = new Date();
     start.setDate(end.getDate() - 6);
-    setFromYMD(formatDateYMD(start));
-    setToYMD(formatDateYMD(end));
+    const s = formatDateYMD(start);
+    const e = formatDateYMD(end);
+    setFromYMD(s); setToYMD(e);
+    handleLoadData(s, e);
   };
 
   const setQuickThisMonth = () => {
     const now = new Date();
     const start = new Date(now.getFullYear(), now.getMonth(), 1);
-    setFromYMD(formatDateYMD(start));
-    setToYMD(formatDateYMD(now));
+    const s = formatDateYMD(start);
+    const e = formatDateYMD(now);
+    setFromYMD(s); setToYMD(e);
+    handleLoadData(s, e);
   };
 
   // Toggle Bill Printed status
@@ -537,6 +561,15 @@ export function ReceiptGeneratorApp() {
                 className="bg-transparent outline-none font-bold text-slate-800 text-xs"
               />
             </div>
+
+            <button
+              onClick={() => handleLoadData(fromYMD, toYMD)}
+              disabled={isLoading}
+              className="flex items-center justify-center gap-1.5 bg-[#0E6655] hover:bg-teal-800 text-white text-xs font-bold px-3.5 py-1.5 rounded-xl shadow-2xs transition active:scale-95 disabled:opacity-50"
+              title="Fetch records for selected dates"
+            >
+              <Search className="w-3.5 h-3.5" /> Search
+            </button>
           </div>
 
           {/* Quick Filter Buttons */}
