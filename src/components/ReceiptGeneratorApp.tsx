@@ -268,7 +268,11 @@ export function ReceiptGeneratorApp() {
   const grandTotal = upiTotal + cashTotal;
 
   // Helper: Auto-sync generated text reports to Google Drive API
-  const syncToDrive = async (filename: string, content: string, subfolderPath: string[] = []) => {
+  const syncToDrive = async (
+    filename: string,
+    content: string,
+    subfolderPath: string[] = []
+  ): Promise<{ success: boolean; error?: string }> => {
     try {
       setDriveSyncStatus(`☁️ Syncing ${filename}...`);
       const resp = await fetch("/api/drive/sync", {
@@ -279,12 +283,16 @@ export function ReceiptGeneratorApp() {
       const resData = await resp.json();
       if (resp.ok && resData.success && !resData.simulated) {
         setDriveSyncStatus(`☁️ Google Drive: Synced ${filename}`);
+        return { success: true };
       } else {
         const errMsg = resData.error || resData.message || "Google Drive credentials not set on Vercel";
         setDriveSyncStatus(`⚠️ Drive sync: ${errMsg}`);
+        return { success: false, error: errMsg };
       }
     } catch (e: any) {
-      setDriveSyncStatus(`⚠️ Drive sync error: ${e.message || "Offline"}`);
+      const errMsg = e.message || "Offline / Network Error";
+      setDriveSyncStatus(`⚠️ Drive sync error: ${errMsg}`);
+      return { success: false, error: errMsg };
     }
   };
 
@@ -367,21 +375,26 @@ export function ReceiptGeneratorApp() {
     const yearStr = String(firstDateObj.getFullYear());
     const monthName = MONTH_NAMES[firstDateObj.getMonth() + 1];
 
-    // Generate individual receipts
-    savedItems.forEach((item) => {
-      if (item.is_advance_group) return;
+    const failedSyncs: { filename: string; error?: string }[] = [];
+
+    // Generate individual receipts sequentially to avoid folder creation race conditions
+    for (const item of savedItems) {
+      if (item.is_advance_group) continue;
       const receiptTxt = generatePatientTextReceipt(item);
       const sanName = item.patient_name.replace(/[^a-z0-9]/gi, "_").substring(0, 20);
       const filename = `Receipt_${item.payment_id}_${sanName}.txt`;
 
-      syncToDrive(filename, receiptTxt, [
+      const res = await syncToDrive(filename, receiptTxt, [
         "Saved_Receipts",
         yearStr,
         monthName,
         dateLabel,
         "Individual_Receipts",
       ]);
-    });
+      if (!res.success) {
+        failedSyncs.push({ filename, error: res.error });
+      }
+    }
 
     // Generate Daily Summary Report
     const daySummaryObj: DaySummary = {
@@ -399,7 +412,10 @@ export function ReceiptGeneratorApp() {
     };
     const daySummaryTxt = generateDailyTextReport(daySummaryObj);
     const summaryFilename = `summary_${dateLabel}.txt`;
-    syncToDrive(summaryFilename, daySummaryTxt, ["Saved_Receipts", yearStr, monthName, dateLabel]);
+    const dayRes = await syncToDrive(summaryFilename, daySummaryTxt, ["Saved_Receipts", yearStr, monthName, dateLabel]);
+    if (!dayRes.success) {
+      failedSyncs.push({ filename: summaryFilename, error: dayRes.error });
+    }
 
     // Update Monthly Summary Report
     const allStore = loadSavedBillsStore();
@@ -445,11 +461,22 @@ export function ReceiptGeneratorApp() {
       };
       const mSummaryTxt = generateMonthlyTextReport(monthlySummaryObj);
       const monthlyFilename = `Monthly_Summary_${monthName}_${yearStr}.txt`;
-      syncToDrive(monthlyFilename, mSummaryTxt, ["Saved_Receipts", yearStr, monthName]);
+      const monthRes = await syncToDrive(monthlyFilename, mSummaryTxt, ["Saved_Receipts", yearStr, monthName]);
+      if (!monthRes.success) {
+        failedSyncs.push({ filename: monthlyFilename, error: monthRes.error });
+      }
     }
 
-    alert(`✅ Saved ${savedItems.length} receipt(s) to storage!\nAuto-synced reports to Google Drive.`);
-    setStatusMsg(`✅ Saved bills for ${dateLabel}`);
+    if (failedSyncs.length > 0) {
+      const firstErr = failedSyncs[0].error || "Unknown error";
+      alert(
+        `✅ Saved ${savedItems.length} receipt(s) to local storage.\n\n⚠️ WARNING: Google Drive sync failed for ${failedSyncs.length} file(s)!\nReason: ${firstErr}`
+      );
+      setStatusMsg(`⚠️ Saved locally, but Google Drive sync failed: ${firstErr}`);
+    } else {
+      alert(`✅ Saved ${savedItems.length} receipt(s) locally and successfully synced all files to Google Drive!`);
+      setStatusMsg(`✅ Saved bills and synced to Google Drive for ${dateLabel}`);
+    }
   };
 
   return (
