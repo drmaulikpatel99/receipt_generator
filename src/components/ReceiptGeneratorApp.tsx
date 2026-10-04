@@ -79,7 +79,16 @@ export function ReceiptGeneratorApp() {
     setIsLoading(true);
     setStatusMsg("⏳ Fetching records from database...");
     try {
-      const data = await fetchPaymentsByDateRange(from, to);
+      const rawData = await fetchPaymentsByDateRange(from, to);
+
+      // Financial Filter: Exclude appointment-only entries with ₹0 payment/advance collected
+      const data = rawData.filter((r) => {
+        const c1 = Number(r.collected_today || 0);
+        const c2 = Number(r.collected_today2 || 0);
+        const adv = Number((r as any).advance_amount || 0);
+        return (c1 + c2 + adv) > 0;
+      });
+
       setRawRecords(data);
 
       const localStatus = loadLocalStatus();
