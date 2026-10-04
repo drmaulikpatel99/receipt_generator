@@ -536,6 +536,22 @@ export function ReceiptGeneratorApp() {
         </div>
       </header>
 
+      {/* ── Top Live Status & Sync Banner ─────────────────────────────── */}
+      <div className="bg-teal-950 text-teal-100 border-t border-b border-teal-800/60 py-2 px-4 sm:px-6 flex flex-col sm:flex-row items-center justify-between text-xs font-medium gap-1 text-center sm:text-left shadow-2xs z-20">
+        <div className="flex items-center gap-2 justify-center sm:justify-start">
+          <span className="relative flex h-2.5 w-2.5">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-400"></span>
+          </span>
+          <span className="font-semibold text-white tracking-wide">{statusMsg}</span>
+        </div>
+        {driveSyncStatus && (
+          <div className="font-bold text-emerald-300 bg-teal-900/80 px-2.5 py-0.5 rounded-full border border-teal-700/50">
+            {driveSyncStatus}
+          </div>
+        )}
+      </div>
+
       {/* ── Date Picker Strip (Auto-loading on Date Change) ─────────────── */}
       <section className="bg-white border-b border-slate-200 p-3 sm:p-4 shadow-xs">
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center justify-between gap-3">
@@ -879,10 +895,9 @@ export function ReceiptGeneratorApp() {
         )}
       </main>
 
-      {/* ── Footer Status Bar ─────────────────────────────────────────── */}
-      <footer className="bg-slate-200 border-t border-slate-300 py-2.5 px-4 sm:px-6 flex flex-col sm:flex-row items-center justify-between text-xs text-slate-600 gap-1 text-center sm:text-left">
-        <div>{statusMsg}</div>
-        {driveSyncStatus && <div className="font-semibold text-slate-700">{driveSyncStatus}</div>}
+      {/* ── Footer ─────────────────────────────────────────────────────── */}
+      <footer className="bg-slate-200 border-t border-slate-300 py-2.5 px-4 sm:px-6 flex items-center justify-center text-xs text-slate-500 text-center font-medium">
+        <div>Babyscan Fetal Medicine & Gynec Imaging © {new Date().getFullYear()}</div>
       </footer>
 
       {/* ── Financial Year Modal ──────────────────────────────────────── */}
