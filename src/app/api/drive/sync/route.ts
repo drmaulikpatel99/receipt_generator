@@ -4,7 +4,7 @@ import { Readable } from "stream";
 
 /**
  * Serverless API Route to upload/sync receipt .txt files into Google Drive
- * Fixed for Google Service Accounts (Readable stream & folder duplicate prevention)
+ * Supports both OAuth2 User Refresh Token (Recommended for personal Gmail) and Service Accounts.
  */
 export async function POST(req: NextRequest) {
   try {
@@ -14,26 +14,41 @@ export async function POST(req: NextRequest) {
     const mimeType = body.mimeType || "text/plain";
     let folderPath: string[] = body.folderPath || body.subfolderPath || [];
 
+    // OAuth2 User Credentials (Recommended for Personal @gmail.com accounts)
+    const clientId = process.env.GOOGLE_DRIVE_CLIENT_ID;
+    const clientSecret = process.env.GOOGLE_DRIVE_CLIENT_SECRET;
+    const refreshToken = process.env.GOOGLE_DRIVE_REFRESH_TOKEN;
+
+    // Service Account Credentials (Fallback)
     const clientEmail = process.env.GOOGLE_DRIVE_CLIENT_EMAIL;
     const privateKey = process.env.GOOGLE_DRIVE_PRIVATE_KEY?.replace(/\\n/g, "\n");
+    
     const parentFolderId = process.env.GOOGLE_DRIVE_FOLDER_ID;
 
-    if (!clientEmail || !privateKey) {
+    let auth: any;
+
+    if (clientId && clientSecret && refreshToken) {
+      // Use OAuth2 User Account (No Service Account Quota Limit!)
+      const oauth2Client = new google.auth.OAuth2(clientId, clientSecret);
+      oauth2Client.setCredentials({ refresh_token: refreshToken });
+      auth = oauth2Client;
+    } else if (clientEmail && privateKey) {
+      // Fallback: Service Account JWT
+      auth = new google.auth.JWT({
+        email: clientEmail,
+        key: privateKey,
+        scopes: ["https://www.googleapis.com/auth/drive"],
+      });
+    } else {
       return NextResponse.json(
         {
           success: false,
           simulated: true,
-          error: "Google Drive sync not configured. Please set GOOGLE_DRIVE_CLIENT_EMAIL and GOOGLE_DRIVE_PRIVATE_KEY in Vercel environment variables.",
+          error: "Google Drive sync not configured. Please set Google Drive environment variables in Vercel.",
         },
         { status: 400 }
       );
     }
-
-    const auth = new google.auth.JWT({
-      email: clientEmail,
-      key: privateKey,
-      scopes: ["https://www.googleapis.com/auth/drive"],
-    });
 
     const drive = google.drive({ version: "v3", auth });
 
