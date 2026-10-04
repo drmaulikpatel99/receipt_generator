@@ -1,18 +1,13 @@
 "use client";
 
-import React, { useState, useEffect, useTransition } from "react";
+import React, { useState, useEffect } from "react";
 import {
   Calendar,
   Save,
   BarChart3,
-  FolderOpen,
-  CloudUpload,
-  Search,
   CheckCircle2,
   XCircle,
   Clock,
-  Printer,
-  Share2,
   Sparkles,
   Settings,
   Lock,
@@ -40,7 +35,6 @@ import {
   parseYMD,
   cleanScanDescription,
   isUpiMode,
-  toSortableDate,
 } from "@/lib/utils";
 import { YearlySummaryModal } from "./YearlySummaryModal";
 import { SettingsAuthModal } from "./SettingsAuthModal";
@@ -49,21 +43,6 @@ const MONTH_NAMES = [
   "", "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December"
 ];
-
-interface UIProcessedRow {
-  pid: string;
-  originalRecord: SupabasePaymentRecord;
-  dateStr: string;
-  patientName: string;
-  origScan: string;
-  activeScan: string;
-  mode: string;
-  isUpi: boolean;
-  totalCharges: number;
-  billPrinted: boolean;
-  manualAmountStr: string;
-  isAdvanceGroup?: boolean;
-}
 
 export function ReceiptGeneratorApp() {
   const todayYMD = formatDateYMD(new Date());
@@ -95,7 +74,7 @@ export function ReceiptGeneratorApp() {
     });
   }, []);
 
-  // Load patient data from Supabase
+  // Load patient data from Supabase automatically
   const handleLoadData = async (from: string, to: string) => {
     setIsLoading(true);
     setStatusMsg("⏳ Fetching records from database...");
@@ -130,9 +109,10 @@ export function ReceiptGeneratorApp() {
     }
   };
 
+  // Auto-fetch data whenever fromYMD or toYMD changes
   useEffect(() => {
-    handleLoadData(todayYMD, todayYMD);
-  }, []);
+    handleLoadData(fromYMD, toYMD);
+  }, [fromYMD, toYMD]);
 
   const refreshAuthUser = () => {
     getCurrentUser().then((user) => {
@@ -150,7 +130,6 @@ export function ReceiptGeneratorApp() {
   const setQuickToday = () => {
     const d = formatDateYMD(new Date());
     setFromYMD(d); setToYMD(d);
-    handleLoadData(d, d);
   };
 
   const setQuickYesterday = () => {
@@ -158,26 +137,21 @@ export function ReceiptGeneratorApp() {
     prev.setDate(prev.getDate() - 1);
     const d = formatDateYMD(prev);
     setFromYMD(d); setToYMD(d);
-    handleLoadData(d, d);
   };
 
   const setQuickLast7 = () => {
     const end = new Date();
     const start = new Date();
     start.setDate(end.getDate() - 6);
-    const s = formatDateYMD(start);
-    const e = formatDateYMD(end);
-    setFromYMD(s); setToYMD(e);
-    handleLoadData(s, e);
+    setFromYMD(formatDateYMD(start));
+    setToYMD(formatDateYMD(end));
   };
 
   const setQuickThisMonth = () => {
     const now = new Date();
     const start = new Date(now.getFullYear(), now.getMonth(), 1);
-    const s = formatDateYMD(start);
-    const e = formatDateYMD(now);
-    setFromYMD(s); setToYMD(e);
-    handleLoadData(s, e);
+    setFromYMD(formatDateYMD(start));
+    setToYMD(formatDateYMD(now));
   };
 
   // Toggle Bill Printed status
@@ -377,7 +351,7 @@ export function ReceiptGeneratorApp() {
 
     const failedSyncs: { filename: string; error?: string }[] = [];
 
-    // Generate individual receipts sequentially to avoid folder creation race conditions
+    // Generate individual receipts sequentially
     for (const item of savedItems) {
       if (item.is_advance_group) continue;
       const receiptTxt = generatePatientTextReceipt(item);
@@ -480,30 +454,31 @@ export function ReceiptGeneratorApp() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="min-h-screen flex flex-col bg-slate-50 text-slate-800 antialiased">
       {/* ── Top Header ────────────────────────────────────────────────── */}
-      <header className="bg-[#0E6655] text-white shadow-lg py-3.5 px-6 flex flex-wrap items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <div className="bg-white/10 p-2 rounded-xl backdrop-blur-md">
-            <Sparkles className="w-7 h-7 text-teal-200" />
+      <header className="bg-[#0E6655] text-white shadow-md py-3 px-4 sm:px-6 flex flex-wrap items-center justify-between gap-3 sticky top-0 z-30">
+        <div className="flex items-center gap-2.5">
+          <div className="bg-white/10 p-1.5 sm:p-2 rounded-xl backdrop-blur-md">
+            <Sparkles className="w-5 h-5 sm:w-6 sm:h-6 text-teal-200" />
           </div>
           <div>
-            <h1 className="text-xl font-bold tracking-tight">Babyscan Clinic</h1>
-            <p className="text-xs text-teal-200 font-medium">Cloud Receipt Generator & Analytics</p>
+            <h1 className="text-base sm:text-xl font-bold tracking-tight leading-tight">Babyscan Clinic</h1>
+            <p className="text-[10px] sm:text-xs text-teal-200 font-medium">Cloud Receipts Portal</p>
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-2">
           {/* Settings & Admin Login Button */}
           <button
             onClick={() => setIsSettingsOpen(true)}
-            className="flex items-center gap-2 bg-teal-800 hover:bg-teal-900 text-white text-xs font-bold px-3 py-2 rounded-xl shadow transition border border-teal-600/50"
+            className="flex items-center gap-1.5 bg-teal-800 hover:bg-teal-900 text-white text-xs font-bold px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-xl shadow-xs transition border border-teal-600/50"
+            title="Admin Login & Settings"
           >
             <Settings className="w-4 h-4 text-teal-200" />
             {currentUserEmail ? (
-              <span className="flex items-center gap-1.5">
+              <span className="flex items-center gap-1">
                 <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-                <span className="hidden sm:inline max-w-[140px] truncate">{currentUserEmail}</span>
+                <span className="hidden md:inline max-w-[120px] truncate">{currentUserEmail}</span>
               </span>
             ) : (
               <span className="flex items-center gap-1 text-amber-300">
@@ -514,45 +489,49 @@ export function ReceiptGeneratorApp() {
 
           <button
             onClick={handleSaveBills}
-            className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-3.5 py-2 rounded-xl shadow transition"
+            className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-xl shadow-xs transition active:scale-95"
           >
-            <Save className="w-4 h-4" /> Save Bills
+            <Save className="w-4 h-4" /> <span className="hidden sm:inline">Save Bills</span><span className="sm:hidden">Save</span>
           </button>
+          
           <button
             onClick={() => setIsFYModalOpen(true)}
-            className="flex items-center gap-2 bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold px-3.5 py-2 rounded-xl shadow transition"
+            className="flex items-center gap-1.5 bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-xl shadow-xs transition active:scale-95"
           >
-            <BarChart3 className="w-4 h-4" /> Yearly Summary
+            <BarChart3 className="w-4 h-4" /> <span className="hidden sm:inline">Yearly Summary</span><span className="sm:hidden">Summary</span>
           </button>
         </div>
       </header>
 
-      {/* ── Date Picker Strip ─────────────────────────────────────────── */}
-      <section className="bg-indigo-50/80 border-b border-indigo-100 p-4 flex flex-wrap items-center justify-between gap-4">
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center gap-2 text-indigo-900 font-bold text-sm">
-            <Calendar className="w-4 h-4 text-indigo-600" /> Date Filter:
-          </div>
+      {/* ── Date Picker Strip (Auto-loading on Date Change) ─────────────── */}
+      <section className="bg-white border-b border-slate-200 p-3 sm:p-4 shadow-xs">
+        <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center justify-between gap-3">
+          
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-1.5 text-[#0E6655] font-bold text-xs sm:text-sm">
+              <Calendar className="w-4 h-4" /> Date Filter:
+            </div>
 
-          <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-xl border border-indigo-200 shadow-sm text-xs font-medium">
-            <span className="text-slate-500 font-bold">From</span>
-            <input
-              type="date"
-              value={fromYMD}
-              onChange={(e) => setFromYMD(e.target.value)}
-              className="outline-none font-semibold text-slate-800"
-            />
-            <span className="text-slate-500 font-bold">To</span>
-            <input
-              type="date"
-              value={toYMD}
-              onChange={(e) => setToYMD(e.target.value)}
-              className="outline-none font-semibold text-slate-800"
-            />
+            <div className="flex items-center gap-1.5 bg-slate-50 px-2.5 py-1.5 rounded-xl border border-slate-200 text-xs font-semibold w-full sm:w-auto">
+              <span className="text-slate-400">From</span>
+              <input
+                type="date"
+                value={fromYMD}
+                onChange={(e) => setFromYMD(e.target.value)}
+                className="bg-transparent outline-none font-bold text-slate-800 text-xs"
+              />
+              <span className="text-slate-400">To</span>
+              <input
+                type="date"
+                value={toYMD}
+                onChange={(e) => setToYMD(e.target.value)}
+                className="bg-transparent outline-none font-bold text-slate-800 text-xs"
+              />
+            </div>
           </div>
 
           {/* Quick Filter Buttons */}
-          <div className="flex flex-wrap items-center gap-1.5">
+          <div className="grid grid-cols-4 sm:flex items-center gap-1.5">
             {[
               { label: "Today", fn: setQuickToday },
               { label: "Yesterday", fn: setQuickYesterday },
@@ -562,81 +541,180 @@ export function ReceiptGeneratorApp() {
               <button
                 key={b.label}
                 onClick={b.fn}
-                className="bg-[#0E6655] hover:bg-teal-800 text-white text-xs font-bold px-3 py-1.5 rounded-lg shadow-sm transition"
+                className="bg-teal-50 hover:bg-teal-100 text-[#0E6655] border border-teal-200 text-[11px] sm:text-xs font-bold py-1.5 px-2 sm:px-3 rounded-lg text-center transition active:scale-95"
               >
                 {b.label}
               </button>
             ))}
           </div>
-        </div>
 
-        <button
-          onClick={() => handleLoadData(fromYMD, toYMD)}
-          disabled={isLoading}
-          className="flex items-center gap-2 bg-[#0E6655] hover:bg-teal-800 text-white text-xs font-bold px-4 py-2 rounded-xl shadow transition disabled:opacity-50"
-        >
-          <Search className="w-4 h-4" /> Load Patients
-        </button>
+        </div>
       </section>
 
       {/* ── Stats Bar ─────────────────────────────────────────────────── */}
-      <section className="bg-sky-50 border-b border-sky-100 py-3 px-6 flex flex-wrap items-center justify-between gap-4">
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-6 text-center flex-1 max-w-3xl">
-          <div className="bg-white p-2.5 rounded-xl border border-sky-100 shadow-sm">
-            <p className="text-[11px] font-semibold text-slate-400 uppercase">Patients</p>
-            <p className="text-lg font-black text-[#0E6655]">{patientCount}</p>
+      <section className="bg-slate-100/80 border-b border-slate-200 py-3 px-3 sm:px-6">
+        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+          
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-4 flex-1">
+            <div className="bg-white p-2.5 rounded-xl border border-slate-200 shadow-2xs text-center">
+              <p className="text-[10px] sm:text-[11px] font-bold text-slate-400 uppercase">Patients</p>
+              <p className="text-base sm:text-lg font-black text-[#0E6655]">{patientCount}</p>
+            </div>
+            <div className="bg-white p-2.5 rounded-xl border border-slate-200 shadow-2xs text-center">
+              <p className="text-[10px] sm:text-[11px] font-bold text-slate-400 uppercase">UPI Total</p>
+              <p className="text-base sm:text-lg font-black text-emerald-600">₹{upiTotal.toLocaleString()}</p>
+            </div>
+            <div className="bg-white p-2.5 rounded-xl border border-slate-200 shadow-2xs text-center">
+              <p className="text-[10px] sm:text-[11px] font-bold text-slate-400 uppercase">Cash Total</p>
+              <p className="text-base sm:text-lg font-black text-amber-600">₹{cashTotal.toLocaleString()}</p>
+            </div>
+            <div className="bg-white p-2.5 rounded-xl border border-slate-200 shadow-2xs text-center">
+              <p className="text-[10px] sm:text-[11px] font-bold text-slate-400 uppercase">Grand Total</p>
+              <p className="text-base sm:text-lg font-black text-purple-700">₹{grandTotal.toLocaleString()}</p>
+            </div>
           </div>
-          <div className="bg-white p-2.5 rounded-xl border border-sky-100 shadow-sm">
-            <p className="text-[11px] font-semibold text-slate-400 uppercase">UPI Total</p>
-            <p className="text-lg font-black text-emerald-600">₹{upiTotal.toLocaleString()}</p>
-          </div>
-          <div className="bg-white p-2.5 rounded-xl border border-sky-100 shadow-sm">
-            <p className="text-[11px] font-semibold text-slate-400 uppercase">Cash Total</p>
-            <p className="text-lg font-black text-amber-600">₹{cashTotal.toLocaleString()}</p>
-          </div>
-          <div className="bg-white p-2.5 rounded-xl border border-sky-100 shadow-sm">
-            <p className="text-[11px] font-semibold text-slate-400 uppercase">Grand Total</p>
-            <p className="text-lg font-black text-purple-700">₹{grandTotal.toLocaleString()}</p>
-          </div>
-        </div>
 
-        <div className="text-xs font-medium text-slate-500 bg-white/80 px-3 py-1.5 rounded-lg border border-sky-100">
-          🟩 UPI / Printed Cash &nbsp;&nbsp; 🟨 Cash without Bill
+          <div className="text-[10px] sm:text-xs font-semibold text-slate-500 bg-white px-3 py-1.5 rounded-lg border border-slate-200 text-center">
+            🟩 UPI / Printed Cash &nbsp;&nbsp; 🟨 Cash without Bill
+          </div>
+
         </div>
       </section>
 
-      {/* ── Main Patient Table ────────────────────────────────────────── */}
-      <main className="flex-1 p-6 max-w-7xl w-full mx-auto">
-        <div className="bg-white rounded-2xl shadow-md border border-slate-200 overflow-hidden">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="bg-slate-100 border-b border-slate-200 text-xs font-bold text-slate-600 uppercase">
-                <th className="py-3.5 px-4">Date</th>
-                <th className="py-3.5 px-4">Patient Name</th>
-                <th className="py-3.5 px-4">Scan Description</th>
-                <th className="py-3.5 px-4 text-center">Mode</th>
-                <th className="py-3.5 px-4 text-right">Total Charges</th>
-                <th className="py-3.5 px-4 text-center">Bill Printed?</th>
-                <th className="py-3.5 px-4 text-center">Receipt Amount (₹)</th>
-              </tr>
-            </thead>
+      {/* ── Main Content Container ────────────────────────────────────── */}
+      <main className="flex-1 p-3 sm:p-6 max-w-7xl w-full mx-auto">
+        
+        {/* Loading Spinner */}
+        {isLoading ? (
+          <div className="bg-white rounded-2xl shadow-xs border border-slate-200 py-12 text-center text-slate-500 font-semibold space-y-2">
+            <Clock className="w-7 h-7 animate-spin mx-auto text-[#0E6655]" />
+            <p className="text-sm">Fetching patient records...</p>
+          </div>
+        ) : rawRecords.length === 0 ? (
+          <div className="bg-white rounded-2xl shadow-xs border border-slate-200 py-12 text-center text-slate-400 font-medium text-sm">
+            No payment records found for selected date range.
+          </div>
+        ) : (
+          <>
+            {/* 1. Mobile Cards View (Visible on screens smaller than md) */}
+            <div className="block md:hidden space-y-3">
+              {/* Normal Records Cards */}
+              {normalRecords.map((r) => {
+                const pid = String(r.id);
+                const modeStr = (r.collected_mode || "") + " " + (r.collected_mode2 || "");
+                const isUpi = isUpiMode(modeStr);
+                const state = rowStates[pid] || { amountStr: "", printed: Boolean(r.bill_printed) };
+                const totalCharges = (r.collected_today || 0) + (r.collected_today2 || 0);
 
-            <tbody className="divide-y divide-slate-100 text-sm">
-              {isLoading ? (
-                <tr>
-                  <td colSpan={7} className="py-12 text-center text-slate-500 font-semibold">
-                    <Clock className="w-6 h-6 animate-spin mx-auto mb-2 text-[#0E6655]" />
-                    Loading patient records...
-                  </td>
-                </tr>
-              ) : rawRecords.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="py-12 text-center text-slate-400 font-medium">
-                    No payment records found for selected date range.
-                  </td>
-                </tr>
-              ) : (
-                <>
+                const isAdvance = Boolean(r.is_advance_booking);
+                const origScan = isAdvance
+                  ? "Advance for Appointment"
+                  : cleanScanDescription(r.scan_description);
+
+                const cardBg = isUpi || state.printed ? "bg-emerald-50/70 border-emerald-200" : "bg-amber-50/70 border-amber-200";
+
+                return (
+                  <div key={`mob_${pid}`} className={`p-3.5 rounded-2xl border shadow-2xs space-y-2.5 ${cardBg}`}>
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <span className="text-[10px] font-bold text-slate-400">📅 {r.collected_date || "—"}</span>
+                        <h4 className="font-bold text-base text-slate-900 leading-tight">{r.patient_name || "—"}</h4>
+                        <p className="text-xs text-slate-600 mt-0.5">🔬 {origScan}</p>
+                      </div>
+
+                      <div className="text-right">
+                        <span className={`inline-block px-2.5 py-0.5 rounded-full text-xs font-extrabold ${isUpi ? "bg-emerald-200 text-emerald-900" : "bg-amber-200 text-amber-900"}`}>
+                          {r.collected_mode || "Cash"}
+                        </span>
+                        <p className="text-sm font-black text-slate-900 mt-1">₹{Math.round(totalCharges).toLocaleString()}</p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between pt-2 border-t border-slate-200/60 text-xs">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-bold text-slate-600">Bill Printed:</span>
+                        {!isUpi ? (
+                          <button
+                            onClick={() => handleTogglePrinted(pid, isUpi, totalCharges)}
+                            className="focus:outline-none p-1"
+                          >
+                            {state.printed ? (
+                              <CheckCircle2 className="w-6 h-6 text-emerald-600 inline" />
+                            ) : (
+                              <XCircle className="w-6 h-6 text-slate-300 inline" />
+                            )}
+                          </button>
+                        ) : (
+                          <span className="text-slate-400 font-semibold">N/A (UPI)</span>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-bold text-slate-600">Receipt ₹:</span>
+                        <input
+                          type="text"
+                          value={state.amountStr}
+                          onChange={(e) => handleAmountChange(pid, e.target.value)}
+                          disabled={isUpi || state.printed}
+                          placeholder={isUpi || state.printed ? String(Math.round(totalCharges)) : "Manual ₹"}
+                          className={`w-24 text-center py-1 rounded-xl font-bold text-xs border outline-none ${
+                            isUpi || state.printed
+                              ? "bg-emerald-100/80 border-emerald-300 text-emerald-900 cursor-not-allowed"
+                              : "bg-white border-amber-300 text-slate-900 shadow-2xs"
+                          }`}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* Advance Booking Group Cards */}
+              {sortedAdvDates.length > 0 && (
+                <div className="space-y-2 pt-2">
+                  <h4 className="text-xs font-bold text-indigo-900 uppercase tracking-wider px-1">
+                    📅 Advance Bookings Grouped Date-wise
+                  </h4>
+                  {sortedAdvDates.map((dStr) => {
+                    const group = advByDate[dStr];
+                    const groupTotal = group.reduce(
+                      (acc, curr) => acc + (curr.collected_today || 0) + (curr.collected_today2 || 0),
+                      0
+                    );
+                    return (
+                      <div key={`mob_adv_${dStr}`} className="bg-indigo-50 border border-indigo-200 p-3.5 rounded-2xl shadow-2xs flex items-center justify-between">
+                        <div>
+                          <span className="text-[10px] font-bold text-indigo-600">📅 {dStr}</span>
+                          <h5 className="font-bold text-sm text-indigo-950">Advance for Appointment</h5>
+                          <p className="text-xs text-indigo-700 font-semibold">{group.length} UPI booking(s)</p>
+                        </div>
+                        <div className="text-right">
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-200 text-emerald-900">UPI</span>
+                          <p className="text-sm font-black text-indigo-950 mt-1">₹{Math.round(groupTotal).toLocaleString()}</p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* 2. Desktop Table View (Visible on screens md and larger) */}
+            <div className="hidden md:block bg-white rounded-2xl shadow-xs border border-slate-200 overflow-hidden">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-slate-100 border-b border-slate-200 text-xs font-bold text-slate-600 uppercase">
+                    <th className="py-3.5 px-4">Date</th>
+                    <th className="py-3.5 px-4">Patient Name</th>
+                    <th className="py-3.5 px-4">Scan Description</th>
+                    <th className="py-3.5 px-4 text-center">Mode</th>
+                    <th className="py-3.5 px-4 text-right">Total Charges</th>
+                    <th className="py-3.5 px-4 text-center">Bill Printed?</th>
+                    <th className="py-3.5 px-4 text-center">Receipt Amount (₹)</th>
+                  </tr>
+                </thead>
+
+                <tbody className="divide-y divide-slate-100 text-sm">
                   {/* Normal Payment Rows */}
                   {normalRecords.map((r) => {
                     const pid = String(r.id);
@@ -701,7 +779,7 @@ export function ReceiptGeneratorApp() {
                             className={`w-28 text-center py-1 rounded-lg font-bold text-sm border outline-none transition ${
                               isUpi || state.printed
                                 ? "bg-emerald-100/60 border-emerald-300 text-emerald-900 cursor-not-allowed"
-                                : "bg-white border-amber-300 focus:ring-2 focus:ring-amber-500 text-slate-900 shadow-xs"
+                                : "bg-white border-amber-300 focus:ring-2 focus:ring-amber-500 text-slate-900 shadow-2xs"
                             }`}
                           />
                         </td>
@@ -752,15 +830,15 @@ export function ReceiptGeneratorApp() {
                       })}
                     </>
                   )}
-                </>
-              )}
-            </tbody>
-          </table>
-        </div>
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
       </main>
 
       {/* ── Footer Status Bar ─────────────────────────────────────────── */}
-      <footer className="bg-slate-200 border-t border-slate-300 py-2 px-6 flex flex-wrap items-center justify-between text-xs text-slate-600">
+      <footer className="bg-slate-200 border-t border-slate-300 py-2.5 px-4 sm:px-6 flex flex-col sm:flex-row items-center justify-between text-xs text-slate-600 gap-1 text-center sm:text-left">
         <div>{statusMsg}</div>
         {driveSyncStatus && <div className="font-semibold text-slate-700">{driveSyncStatus}</div>}
       </footer>
