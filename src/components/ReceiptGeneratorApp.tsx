@@ -389,8 +389,16 @@ export function ReceiptGeneratorApp() {
         date: r.collected_date || "",
       });
 
-      if (split.effectiveUpi > 0) { upiT += split.effectiveUpi; upiN += 1; }
-      if (split.effectiveCash > 0) { cashT += split.effectiveCash; cashN += 1; }
+      if (split.effectiveUpi > 0) {
+        upiT += split.effectiveUpi;
+        upiN += 1;
+      }
+      if (split.effectiveCash > 0) {
+        cashT += split.effectiveCash;
+        if (split.effectiveUpi === 0) {
+          cashN += 1;
+        }
+      }
     });
 
     const dateLabel = formatDateDMY(parseYMD(fromYMD));
@@ -426,7 +434,7 @@ export function ReceiptGeneratorApp() {
       period: dateLabel,
       saved_at: new Date().toLocaleString(),
       totals: {
-        total_patients: upiN + cashN,
+        total_patients: savedItems.length,
         upi_patients: upiN,
         cash_patients: cashN,
         upi_amount: upiT,
@@ -444,44 +452,72 @@ export function ReceiptGeneratorApp() {
 
     // Update Monthly Summary Report
     const allStore = loadSavedBillsStore();
-    const monthlyItemsMap: Record<string, SavedReceiptItem> = {};
+    const daysSummaryMap: Record<string, { totals: DaySummary["totals"] }> = {};
+    let monthlyUpiT = 0;
+    let monthlyCashT = 0;
+    let monthlyPatientsN = 0;
+    let monthlyUpiN = 0;
+    let monthlyCashN = 0;
 
     Object.keys(allStore).forEach((dateKey) => {
       const parts = dateKey.split("-");
       if (parts.length === 3) {
-        const dNum = parseInt(parts[0], 10);
         const mNum = parseInt(parts[1], 10);
         const yNum = parseInt(parts[2], 10);
 
         if (mNum === firstDateObj.getMonth() + 1 && yNum === firstDateObj.getFullYear()) {
-          allStore[dateKey].forEach((item) => {
-            monthlyItemsMap[`${dateKey}_${item.payment_id}`] = item;
+          const itemsForDay = allStore[dateKey] || [];
+          let dUpiT = 0;
+          let dCashT = 0;
+          let dUpiN = 0;
+          let dCashN = 0;
+
+          itemsForDay.forEach((it) => {
+            const uAmt = it.upi_amount !== undefined ? it.upi_amount : (isUpiMode(it.payment_mode) ? it.receipt_amount : 0);
+            const cAmt = it.cash_amount !== undefined ? it.cash_amount : (!isUpiMode(it.payment_mode) && it.bill_printed ? it.receipt_amount : 0);
+
+            dUpiT += uAmt;
+            dCashT += cAmt;
+            if (uAmt > 0) dUpiN += 1;
+            if (cAmt > 0 && uAmt === 0) dCashN += 1;
           });
+
+          daysSummaryMap[dateKey] = {
+            totals: {
+              total_patients: itemsForDay.length,
+              upi_patients: dUpiN,
+              cash_patients: dCashN,
+              upi_amount: dUpiT,
+              cash_amount: dCashT,
+              grand_total: dUpiT + dCashT,
+            },
+          };
+
+          monthlyUpiT += dUpiT;
+          monthlyCashT += dCashT;
+          monthlyPatientsN += itemsForDay.length;
+          monthlyUpiN += dUpiN;
+          monthlyCashN += dCashN;
         }
       }
     });
 
-    const monthlyItemsList = Object.values(monthlyItemsMap);
-    if (monthlyItemsList.length > 0) {
-      let mUpiT = 0, mCashT = 0, mUpiN = 0, mCashN = 0;
-      monthlyItemsList.forEach((it) => {
-        if (isUpiMode(it.payment_mode)) { mUpiT += it.receipt_amount; mUpiN += 1; }
-        else { mCashT += it.receipt_amount; mCashN += 1; }
-      });
+    const totalDaysSaved = Object.keys(daysSummaryMap).length;
 
+    if (totalDaysSaved > 0) {
       const monthlySummaryObj: MonthlySummaryData = {
         year: firstDateObj.getFullYear(),
         month: monthName,
         last_updated: new Date().toLocaleString(),
-        days: {},
+        days: daysSummaryMap,
         monthly_totals: {
-          total_days_saved: 1,
-          total_patients: mUpiN + mCashN,
-          upi_patients: mUpiN,
-          cash_patients: mCashN,
-          upi_amount: mUpiT,
-          cash_amount: mCashT,
-          grand_total: mUpiT + mCashT,
+          total_days_saved: totalDaysSaved,
+          total_patients: monthlyPatientsN,
+          upi_patients: monthlyUpiN,
+          cash_patients: monthlyCashN,
+          upi_amount: monthlyUpiT,
+          cash_amount: monthlyCashT,
+          grand_total: monthlyUpiT + monthlyCashT,
         },
       };
       const mSummaryTxt = generateMonthlyTextReport(monthlySummaryObj);
