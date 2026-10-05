@@ -382,6 +382,8 @@ export function ReceiptGeneratorApp() {
         total_charges: split.totalCharges,
         bill_printed: state.printed,
         receipt_amount: split.effectiveReceiptAmount,
+        cash_amount: split.effectiveCash,
+        upi_amount: split.effectiveUpi,
         referring_doctor: r.referring_doctor || "",
         patient_phone: r.patient_phone || "",
         date: r.collected_date || "",

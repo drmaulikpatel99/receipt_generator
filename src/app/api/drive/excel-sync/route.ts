@@ -197,19 +197,30 @@ export async function POST(req: NextRequest) {
       const pid = String(item.payment_id || "").trim();
       if (!pid) return;
 
-      const printedText = item.bill_printed ? "YES" : "NO";
-      const receiptAmt = item.receipt_amount !== undefined && item.receipt_amount !== null ? item.receipt_amount : 0;
+      let cashAmt = item.cash_amount !== undefined && item.cash_amount !== null ? Number(item.cash_amount) : 0;
+      let upiAmt = item.upi_amount !== undefined && item.upi_amount !== null ? Number(item.upi_amount) : 0;
+
+      if (item.cash_amount === undefined && item.upi_amount === undefined) {
+        const amt = Number(item.receipt_amount || 0);
+        if (item.payment_mode && String(item.payment_mode).toUpperCase().includes("UPI")) {
+          upiAmt = amt;
+          cashAmt = 0;
+        } else {
+          cashAmt = amt;
+          upiAmt = 0;
+        }
+      }
+
+      const totalAmt = cashAmt + upiAmt;
 
       existingRowsMap.set(pid, {
         "Payment ID": pid,
         "Date": item.date || "",
         "Patient Name": item.patient_name || "",
         "Scan Description": item.scan || "",
-        "Payment Mode": item.payment_mode || "",
-        "Total Charges": item.total_charges || 0,
-        "Bill Printed": printedText,
-        "Receipt Amount (₹)": receiptAmt,
-        "Last Updated": nowStr,
+        "Cash (₹)": cashAmt,
+        "UPI (₹)": upiAmt,
+        "Total (₹)": totalAmt,
       });
     });
 
@@ -218,15 +229,13 @@ export async function POST(req: NextRequest) {
     
     // Set column widths
     worksheet["!cols"] = [
-      { wch: 15 },
-      { wch: 14 },
-      { wch: 30 },
-      { wch: 32 },
-      { wch: 14 },
-      { wch: 16 },
-      { wch: 14 },
-      { wch: 20 },
-      { wch: 24 },
+      { wch: 15 }, // Payment ID
+      { wch: 14 }, // Date
+      { wch: 30 }, // Patient Name
+      { wch: 32 }, // Scan Description
+      { wch: 14 }, // Cash (₹)
+      { wch: 14 }, // UPI (₹)
+      { wch: 16 }, // Total (₹)
     ];
 
     const newWorkbook = XLSX.utils.book_new();

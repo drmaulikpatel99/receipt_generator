@@ -17,6 +17,8 @@ export interface SavedReceiptItem {
   patient_phone: string;
   date: string;
   is_advance_group?: boolean;
+  cash_amount?: number;
+  upi_amount?: number;
 }
 
 export interface DaySummary {
