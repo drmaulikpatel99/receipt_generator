@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { google } from "googleapis";
-import ExcelJS from "exceljs";
+import * as XLSX from "xlsx";
 import { Readable } from "stream";
 
 /**
  * API Route to Read/Write Financial Year Master Excel file in Google Drive.
  * File Name Pattern: Master_Receipts_FY2026-27.xlsx in folder FY2026-27
+ * Uses `xlsx` (SheetJS) for 100% Vercel & Webpack bundling compatibility.
  */
 
 function getDriveClient() {
@@ -106,30 +107,28 @@ export async function GET(req: NextRequest) {
     );
 
     const buffer = Buffer.from(fileRes.data as ArrayBuffer);
-    const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.load(buffer as any);
+    const workbook = XLSX.read(buffer, { type: "buffer" });
+    const sheetName = workbook.SheetNames[0];
+    const worksheet = workbook.Sheets[sheetName];
 
-    const sheet = workbook.getWorksheet("Patient_Receipts_Master") || workbook.worksheets[0];
+    const jsonRows: any[] = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
     const statusMap: Record<string, { amount: number | null; bill_printed: boolean }> = {};
 
-    if (sheet) {
-      sheet.eachRow((row, rowNumber) => {
-        if (rowNumber === 1) return; // Skip header
-        const pid = String(row.getCell(1).value || "").trim();
-        if (!pid) return;
+    jsonRows.forEach((row) => {
+      const pid = String(row["Payment ID"] || row["payment_id"] || "").trim();
+      if (!pid) return;
 
-        const printedVal = String(row.getCell(7).value || "").trim().toUpperCase();
-        const isPrinted = printedVal === "YES" || printedVal === "TRUE" || printedVal === "1";
+      const printedVal = String(row["Bill Printed"] || row["bill_printed"] || "").trim().toUpperCase();
+      const isPrinted = printedVal === "YES" || printedVal === "TRUE" || printedVal === "1";
 
-        const amtRaw = row.getCell(8).value;
-        const amtNum = amtRaw !== null && amtRaw !== undefined && amtRaw !== "" ? Number(amtRaw) : null;
+      const amtRaw = row["Receipt Amount (₹)"] ?? row["receipt_amount"];
+      const amtNum = amtRaw !== null && amtRaw !== undefined && amtRaw !== "" ? Number(amtRaw) : null;
 
-        statusMap[pid] = {
-          amount: isNaN(amtNum as number) ? null : amtNum,
-          bill_printed: isPrinted,
-        };
-      });
-    }
+      statusMap[pid] = {
+        amount: isNaN(amtNum as number) ? null : amtNum,
+        bill_printed: isPrinted,
+      };
+    });
 
     return NextResponse.json({ success: true, statusMap, fy });
   } catch (err: any) {
@@ -170,7 +169,7 @@ export async function POST(req: NextRequest) {
       includeItemsFromAllDrives: true,
     });
 
-    const workbook = new ExcelJS.Workbook();
+    let existingRowsMap: Map<string, any> = new Map();
     let existingFileId: string | null = null;
 
     if (fileList.data.files && fileList.data.files.length > 0) {
@@ -180,80 +179,63 @@ export async function POST(req: NextRequest) {
         { responseType: "arraybuffer" }
       );
       const buffer = Buffer.from(fileRes.data as ArrayBuffer);
-      await workbook.xlsx.load(buffer as any);
+      const workbook = XLSX.read(buffer, { type: "buffer" });
+      const sheetName = workbook.SheetNames[0];
+      if (sheetName && workbook.Sheets[sheetName]) {
+        const rows: any[] = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: "" });
+        rows.forEach((r) => {
+          const pid = String(r["Payment ID"] || r["payment_id"] || "").trim();
+          if (pid) existingRowsMap.set(pid, r);
+        });
+      }
     }
 
-    // Get or Create Master Sheet
-    let sheet = workbook.getWorksheet("Patient_Receipts_Master");
-    if (!sheet) {
-      sheet = workbook.addWorksheet("Patient_Receipts_Master");
-      sheet.columns = [
-        { header: "Payment ID", key: "payment_id", width: 15 },
-        { header: "Date", key: "date", width: 14 },
-        { header: "Patient Name", key: "patient_name", width: 30 },
-        { header: "Scan Description", key: "scan", width: 32 },
-        { header: "Payment Mode", key: "payment_mode", width: 14 },
-        { header: "Total Charges", key: "total_charges", width: 16 },
-        { header: "Bill Printed", key: "bill_printed", width: 14 },
-        { header: "Receipt Amount (₹)", key: "receipt_amount", width: 20 },
-        { header: "Last Updated", key: "last_updated", width: 22 },
-      ];
-      // Format Header row
-      sheet.getRow(1).font = { bold: true };
-      sheet.getRow(1).fill = {
-        type: "pattern",
-        pattern: "solid",
-        fgColor: { argb: "FF0E6655" },
-      };
-      sheet.getRow(1).font = { color: { argb: "FFFFFFFF" }, bold: true };
-    }
-
-    // Update or append item rows
     const nowStr = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
 
+    // Update existing map or add new items
     items.forEach((item) => {
       const pid = String(item.payment_id || "").trim();
       if (!pid) return;
 
-      let foundRow: ExcelJS.Row | null = null;
-      sheet.eachRow((row, rowNumber) => {
-        if (rowNumber === 1) return;
-        if (String(row.getCell(1).value || "").trim() === pid) {
-          foundRow = row;
-        }
-      });
-
       const printedText = item.bill_printed ? "YES" : "NO";
       const receiptAmt = item.receipt_amount !== undefined && item.receipt_amount !== null ? item.receipt_amount : 0;
 
-      if (foundRow) {
-        (foundRow as ExcelJS.Row).getCell(2).value = item.date || "";
-        (foundRow as ExcelJS.Row).getCell(3).value = item.patient_name || "";
-        (foundRow as ExcelJS.Row).getCell(4).value = item.scan || "";
-        (foundRow as ExcelJS.Row).getCell(5).value = item.payment_mode || "";
-        (foundRow as ExcelJS.Row).getCell(6).value = item.total_charges || 0;
-        (foundRow as ExcelJS.Row).getCell(7).value = printedText;
-        (foundRow as ExcelJS.Row).getCell(8).value = receiptAmt;
-        (foundRow as ExcelJS.Row).getCell(9).value = nowStr;
-      } else {
-        sheet.addRow({
-          payment_id: pid,
-          date: item.date || "",
-          patient_name: item.patient_name || "",
-          scan: item.scan || "",
-          payment_mode: item.payment_mode || "",
-          total_charges: item.total_charges || 0,
-          bill_printed: printedText,
-          receipt_amount: receiptAmt,
-          last_updated: nowStr,
-        });
-      }
+      existingRowsMap.set(pid, {
+        "Payment ID": pid,
+        "Date": item.date || "",
+        "Patient Name": item.patient_name || "",
+        "Scan Description": item.scan || "",
+        "Payment Mode": item.payment_mode || "",
+        "Total Charges": item.total_charges || 0,
+        "Bill Printed": printedText,
+        "Receipt Amount (₹)": receiptAmt,
+        "Last Updated": nowStr,
+      });
     });
 
-    const outBuffer = await workbook.xlsx.writeBuffer();
+    const finalRowsList = Array.from(existingRowsMap.values());
+    const worksheet = XLSX.utils.json_to_sheet(finalRowsList);
+    
+    // Set column widths
+    worksheet["!cols"] = [
+      { wch: 15 },
+      { wch: 14 },
+      { wch: 30 },
+      { wch: 32 },
+      { wch: 14 },
+      { wch: 16 },
+      { wch: 14 },
+      { wch: 20 },
+      { wch: 24 },
+    ];
+
+    const newWorkbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(newWorkbook, worksheet, "Patient_Receipts_Master");
+
+    const outBuffer = XLSX.write(newWorkbook, { type: "buffer", bookType: "xlsx" });
     const media = {
       mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      body: Readable.from([Buffer.from(outBuffer)]),
+      body: Readable.from([outBuffer]),
     };
 
     if (existingFileId) {
