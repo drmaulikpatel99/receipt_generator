@@ -46,6 +46,51 @@ const MONTH_NAMES = [
   "July", "August", "September", "October", "November", "December"
 ];
 
+// Helper to calculate effective receipt amount & split totals (Cash + UPI)
+export function calculateRecordSplit(
+  r: SupabasePaymentRecord,
+  printed: boolean,
+  manualAmtStr?: string
+) {
+  const c1 = Number(r.collected_today || 0);
+  const c2 = Number(r.collected_today2 || 0);
+
+  const isUpi1 = isUpiMode(r.collected_mode);
+  const isUpi2 = isUpiMode(r.collected_mode2);
+
+  const upiPortion = (isUpi1 ? c1 : 0) + (isUpi2 ? c2 : 0);
+  const cashPortion = (!isUpi1 ? c1 : 0) + (!isUpi2 ? c2 : 0);
+  const totalCharges = c1 + c2;
+
+  let effectiveReceiptAmount = 0;
+  let effectiveUpi = upiPortion;
+  let effectiveCash = 0;
+
+  if (printed) {
+    // If Bill IS Printed -> Include WHOLE amount (Cash + UPI)
+    effectiveReceiptAmount = totalCharges;
+    effectiveCash = cashPortion;
+  } else {
+    // If Bill is NOT Printed -> Include ONLY UPI Portion unless manual cash is entered
+    if (manualAmtStr && Number(manualAmtStr) > 0) {
+      effectiveCash = Number(manualAmtStr);
+      effectiveReceiptAmount = upiPortion + effectiveCash;
+    } else {
+      effectiveReceiptAmount = upiPortion;
+      effectiveCash = 0; // Exclude cash portion
+    }
+  }
+
+  return {
+    upiPortion,
+    cashPortion,
+    totalCharges,
+    effectiveReceiptAmount,
+    effectiveUpi,
+    effectiveCash,
+  };
+}
+
 export function ReceiptGeneratorApp() {
   const todayYMD = formatDateYMD(new Date());
 
@@ -272,20 +317,11 @@ export function ReceiptGeneratorApp() {
   // Process Normal Records stats
   normalRecords.forEach((r) => {
     const pid = String(r.id);
-    const modeStr = (r.collected_mode || "") + " " + (r.collected_mode2 || "");
-    const isUpi = isUpiMode(modeStr);
     const state = rowStates[pid] || { amountStr: "", printed: Boolean(r.bill_printed) };
-    const totalCharges = (r.collected_today || 0) + (r.collected_today2 || 0);
+    const split = calculateRecordSplit(r, state.printed, state.amountStr);
 
-    let amt = 0;
-    if (isUpi || state.printed) {
-      amt = totalCharges;
-    } else if (state.amountStr && Number(state.amountStr) > 0) {
-      amt = Number(state.amountStr);
-    }
-
-    if (isUpi) upiTotal += amt;
-    else cashTotal += amt;
+    upiTotal += split.effectiveUpi;
+    cashTotal += split.effectiveCash;
   });
 
   // Process Advance Booking groups stats
@@ -342,21 +378,14 @@ export function ReceiptGeneratorApp() {
     // Normal records
     normalRecords.forEach((r) => {
       const pid = String(r.id);
-      const modeStr = (r.collected_mode || "") + " " + (r.collected_mode2 || "");
-      const isUpi = isUpiMode(modeStr);
       const state = rowStates[pid] || { amountStr: "", printed: Boolean(r.bill_printed) };
-      const totalCharges = (r.collected_today || 0) + (r.collected_today2 || 0);
+      const split = calculateRecordSplit(r, state.printed, state.amountStr);
 
       const isAdvance = Boolean(r.is_advance_booking);
       const origScan = isAdvance ? "Advance for Appointment" : cleanScanDescription(r.scan_description);
 
-      let amt = 0;
       let activeScan = origScan;
-
-      if (isUpi || state.printed) {
-        amt = totalCharges;
-      } else if (state.amountStr && Number(state.amountStr) > 0) {
-        amt = Number(state.amountStr);
+      if (!isUpiMode(r.collected_mode) && !state.printed && state.amountStr && Number(state.amountStr) > 0) {
         activeScan = "Fetal Well Being";
       }
 
@@ -365,16 +394,16 @@ export function ReceiptGeneratorApp() {
         patient_name: r.patient_name || "—",
         scan: activeScan,
         payment_mode: r.collected_mode || "—",
-        total_charges: r.total_charges || 0,
+        total_charges: split.totalCharges,
         bill_printed: state.printed,
-        receipt_amount: amt,
+        receipt_amount: split.effectiveReceiptAmount,
         referring_doctor: r.referring_doctor || "",
         patient_phone: r.patient_phone || "",
         date: r.collected_date || "",
       });
 
-      if (isUpi) { upiT += amt; upiN += 1; }
-      else { cashT += amt; cashN += 1; }
+      if (split.effectiveUpi > 0) { upiT += split.effectiveUpi; upiN += 1; }
+      if (split.effectiveCash > 0) { cashT += split.effectiveCash; cashN += 1; }
     });
 
     // Advance groups date-wise
