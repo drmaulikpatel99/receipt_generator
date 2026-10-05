@@ -453,56 +453,132 @@ export function ReceiptGeneratorApp() {
       failedSyncs.push({ filename: summaryFilename, error: dayRes.error });
     }
 
-    // Update Monthly Summary Report
-    const allStore = loadSavedBillsStore();
-    const daysSummaryMap: Record<string, { totals: DaySummary["totals"] }> = {};
-    let monthlyUpiT = 0;
-    let monthlyCashT = 0;
-    let monthlyPatientsN = 0;
-    let monthlyUpiN = 0;
-    let monthlyCashN = 0;
+    // Sync Financial Year Master Excel to Google Drive
+    const fy = getFinancialYear(firstDateObj);
+    let masterExcelRows: any[] = [];
+    try {
+      const excelRes = await fetch("/api/drive/excel-sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fy,
+          dateLabel,
+          items: savedItems,
+        }),
+      });
+      const excelJson = await excelRes.json();
+      if (!excelJson.success) {
+        failedSyncs.push({ filename: `Master_Receipts_${fy}.xlsx`, error: excelJson.error || "Excel sync failed" });
+      } else {
+        setDriveSyncStatus(`☁️ Master Excel (${fy}) synced to Google Drive!`);
+        if (Array.isArray(excelJson.allRows)) {
+          masterExcelRows = excelJson.allRows;
+        }
+      }
+    } catch (eErr: any) {
+      failedSyncs.push({ filename: `Master_Receipts_${fy}.xlsx`, error: eErr.message || String(eErr) });
+    }
 
+    // Build Monthly Summary Report (using Master Excel rows as authoritative multi-device source)
+    const targetMonth = firstDateObj.getMonth() + 1;
+    const targetYear = firstDateObj.getFullYear();
+    const daysSummaryMap: Record<string, { totals: DaySummary["totals"] }> = {};
+    const dayDataAccumulator: Record<string, { upiT: number; cashT: number; upiN: number; cashN: number; totalPts: number }> = {};
+
+    if (masterExcelRows.length > 0) {
+      masterExcelRows.forEach((row) => {
+        const rawDate = String(row["Date"] || "").trim();
+        if (!rawDate) return;
+
+        let dNum = 0, mNum = 0, yNum = 0;
+        if (/^\d{4}[-/]\d{1,2}[-/]\d{1,2}/.test(rawDate)) {
+          const p = rawDate.split(/[-/]/);
+          yNum = parseInt(p[0], 10);
+          mNum = parseInt(p[1], 10);
+          dNum = parseInt(p[2], 10);
+        } else if (/^\d{1,2}[-/]\d{1,2}[-/]\d{4}/.test(rawDate)) {
+          const p = rawDate.split(/[-/]/);
+          dNum = parseInt(p[0], 10);
+          mNum = parseInt(p[1], 10);
+          yNum = parseInt(p[2], 10);
+        }
+
+        if (mNum === targetMonth && yNum === targetYear) {
+          const dStr = String(dNum).padStart(2, "0");
+          const mStr = String(mNum).padStart(2, "0");
+          const formattedDateKey = `${dStr}-${mStr}-${yNum}`;
+
+          if (!dayDataAccumulator[formattedDateKey]) {
+            dayDataAccumulator[formattedDateKey] = { upiT: 0, cashT: 0, upiN: 0, cashN: 0, totalPts: 0 };
+          }
+          const acc = dayDataAccumulator[formattedDateKey];
+          const cashVal = Number(row["Cash (₹)"] || 0);
+          const upiVal = Number(row["UPI (₹)"] || 0);
+
+          acc.totalPts += 1;
+          acc.upiT += upiVal;
+          acc.cashT += cashVal;
+          if (upiVal > 0) acc.upiN += 1;
+          if (cashVal > 0 && upiVal === 0) acc.cashN += 1;
+        }
+      });
+    }
+
+    // Merge with local store if day is missing from Master Excel
+    const allStore = loadSavedBillsStore();
     Object.keys(allStore).forEach((dateKey) => {
+      let dNum = 0, mNum = 0, yNum = 0;
       const parts = dateKey.split("-");
       if (parts.length === 3) {
-        const mNum = parseInt(parts[1], 10);
-        const yNum = parseInt(parts[2], 10);
+        dNum = parseInt(parts[0], 10);
+        mNum = parseInt(parts[1], 10);
+        yNum = parseInt(parts[2], 10);
+      }
+      if (mNum === targetMonth && yNum === targetYear) {
+        const dStr = String(dNum).padStart(2, "0");
+        const mStr = String(mNum).padStart(2, "0");
+        const formattedDateKey = `${dStr}-${mStr}-${yNum}`;
 
-        if (mNum === firstDateObj.getMonth() + 1 && yNum === firstDateObj.getFullYear()) {
+        if (!dayDataAccumulator[formattedDateKey]) {
           const itemsForDay = allStore[dateKey] || [];
-          let dUpiT = 0;
-          let dCashT = 0;
-          let dUpiN = 0;
-          let dCashN = 0;
-
+          let dUpiT = 0, dCashT = 0, dUpiN = 0, dCashN = 0;
           itemsForDay.forEach((it) => {
             const uAmt = it.upi_amount !== undefined ? it.upi_amount : (isUpiMode(it.payment_mode) ? it.receipt_amount : 0);
             const cAmt = it.cash_amount !== undefined ? it.cash_amount : (!isUpiMode(it.payment_mode) && it.bill_printed ? it.receipt_amount : 0);
-
             dUpiT += uAmt;
             dCashT += cAmt;
             if (uAmt > 0) dUpiN += 1;
             if (cAmt > 0 && uAmt === 0) dCashN += 1;
           });
-
-          daysSummaryMap[dateKey] = {
-            totals: {
-              total_patients: itemsForDay.length,
-              upi_patients: dUpiN,
-              cash_patients: dCashN,
-              upi_amount: dUpiT,
-              cash_amount: dCashT,
-              grand_total: dUpiT + dCashT,
-            },
+          dayDataAccumulator[formattedDateKey] = {
+            totalPts: itemsForDay.length,
+            upiT: dUpiT,
+            cashT: dCashT,
+            upiN: dUpiN,
+            cashN: dCashN,
           };
-
-          monthlyUpiT += dUpiT;
-          monthlyCashT += dCashT;
-          monthlyPatientsN += itemsForDay.length;
-          monthlyUpiN += dUpiN;
-          monthlyCashN += dCashN;
         }
       }
+    });
+
+    let monthlyUpiT = 0, monthlyCashT = 0, monthlyPatientsN = 0, monthlyUpiN = 0, monthlyCashN = 0;
+    Object.keys(dayDataAccumulator).forEach((dKey) => {
+      const acc = dayDataAccumulator[dKey];
+      daysSummaryMap[dKey] = {
+        totals: {
+          total_patients: acc.totalPts,
+          upi_patients: acc.upiN,
+          cash_patients: acc.cashN,
+          upi_amount: acc.upiT,
+          cash_amount: acc.cashT,
+          grand_total: acc.upiT + acc.cashT,
+        },
+      };
+      monthlyUpiT += acc.upiT;
+      monthlyCashT += acc.cashT;
+      monthlyPatientsN += acc.totalPts;
+      monthlyUpiN += acc.upiN;
+      monthlyCashN += acc.cashN;
     });
 
     const totalDaysSaved = Object.keys(daysSummaryMap).length;
@@ -529,28 +605,6 @@ export function ReceiptGeneratorApp() {
       if (!monthRes.success) {
         failedSyncs.push({ filename: monthlyFilename, error: monthRes.error });
       }
-    }
-
-    // Sync Financial Year Master Excel to Google Drive
-    const fy = getFinancialYear(firstDateObj);
-    try {
-      const excelRes = await fetch("/api/drive/excel-sync", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          fy,
-          dateLabel,
-          items: savedItems,
-        }),
-      });
-      const excelJson = await excelRes.json();
-      if (!excelJson.success) {
-        failedSyncs.push({ filename: `Master_Receipts_${fy}.xlsx`, error: excelJson.error || "Excel sync failed" });
-      } else {
-        setDriveSyncStatus(`☁️ Master Excel (${fy}) synced to Google Drive!`);
-      }
-    } catch (eErr: any) {
-      failedSyncs.push({ filename: `Master_Receipts_${fy}.xlsx`, error: eErr.message || String(eErr) });
     }
 
     if (failedSyncs.length > 0) {

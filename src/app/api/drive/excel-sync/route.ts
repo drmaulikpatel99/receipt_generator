@@ -147,10 +147,10 @@ export async function GET(req: NextRequest) {
       };
     });
 
-    return NextResponse.json({ success: true, statusMap, fy });
+    return NextResponse.json({ success: true, statusMap, rows: jsonRows, fy });
   } catch (err: any) {
     console.error("GET Master Excel Sync Error:", err);
-    return NextResponse.json({ success: false, error: err.message, statusMap: {} });
+    return NextResponse.json({ success: false, error: err.message, statusMap: {}, rows: [] });
   }
 }
 
@@ -270,7 +270,7 @@ export async function POST(req: NextRequest) {
         media,
         supportsAllDrives: true,
       });
-      return NextResponse.json({ success: true, fileId: existingFileId, action: "updated", fy });
+      return NextResponse.json({ success: true, fileId: existingFileId, action: "updated", fy, allRows: finalRowsList });
     } else {
       const fileMetadata: any = {
         name: filename,
@@ -286,7 +286,7 @@ export async function POST(req: NextRequest) {
         supportsAllDrives: true,
       });
 
-      return NextResponse.json({ success: true, fileId: newFile.data.id, action: "created", fy });
+      return NextResponse.json({ success: true, fileId: newFile.data.id, action: "created", fy, allRows: finalRowsList });
     }
   } catch (err: any) {
     console.error("POST Master Excel Sync Error:", err);

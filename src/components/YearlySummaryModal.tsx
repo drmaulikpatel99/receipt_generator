@@ -36,85 +36,131 @@ export function YearlySummaryModal({ isOpen, onClose, onSyncDrive }: YearlySumma
   useEffect(() => {
     if (!isOpen) return;
 
-    const store = loadSavedBillsStore();
-    const months: Array<{
-      year: number;
-      monthIdx: number;
-      monthName: string;
-      label: string;
-      patients: number;
-      upiAmount: number;
-      cashAmount: number;
-      totalAmount: number;
-    }> = [];
+    let isMounted = true;
+    const endYear = selectedStartYear + 1;
+    const fyLabel = `FY${selectedStartYear}-${String(endYear).slice(2)}`;
 
-    // Financial year: April (4) to December (12) of startYear, then January (1) to March (3) of startYear+1
-    const fyMonthsList: Array<[number, number]> = [];
-    for (let m = 4; m <= 12; m++) fyMonthsList.push([selectedStartYear, m]);
-    for (let m = 1; m <= 3; m++) fyMonthsList.push([selectedStartYear + 1, m]);
-
-    let totPts = 0;
-    let totUpi = 0;
-    let totCash = 0;
-
-    fyMonthsList.forEach(([yr, mIdx]) => {
-      const mName = MONTH_NAMES[mIdx];
-      let pCnt = 0;
-      let uAmt = 0;
-      let cAmt = 0;
-
-      Object.entries(store).forEach(([dateLabel, items]) => {
-        // Date format: DD-MM-YYYY
-        const parts = dateLabel.split("-");
-        if (parts.length === 3) {
-          const itemYear = Number(parts[2]);
-          const itemMonth = Number(parts[1]);
-          if (itemYear === yr && itemMonth === mIdx) {
-            items.forEach((r: SavedReceiptItem) => {
-              const amt = Number(r.receipt_amount || 0);
-              pCnt += 1;
-              if (isUpiMode(r.payment_mode)) {
-                uAmt += amt;
-              } else {
-                cAmt += amt;
-              }
-            });
+    const loadFyData = async () => {
+      let masterRows: any[] = [];
+      try {
+        const res = await fetch(`/api/drive/excel-sync?fy=${fyLabel}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && Array.isArray(data.rows)) {
+            masterRows = data.rows;
           }
         }
+      } catch (e) {
+        console.warn("Could not fetch Master Excel for FY summary:", e);
+      }
+
+      const store = loadSavedBillsStore();
+      const months: Array<{
+        year: number;
+        monthIdx: number;
+        monthName: string;
+        label: string;
+        patients: number;
+        upiAmount: number;
+        cashAmount: number;
+        totalAmount: number;
+      }> = [];
+
+      const fyMonthsList: Array<[number, number]> = [];
+      for (let m = 4; m <= 12; m++) fyMonthsList.push([selectedStartYear, m]);
+      for (let m = 1; m <= 3; m++) fyMonthsList.push([selectedStartYear + 1, m]);
+
+      let totPts = 0;
+      let totUpi = 0;
+      let totCash = 0;
+
+      fyMonthsList.forEach(([yr, mIdx]) => {
+        const mName = MONTH_NAMES[mIdx];
+        let pCnt = 0;
+        let uAmt = 0;
+        let cAmt = 0;
+
+        if (masterRows.length > 0) {
+          masterRows.forEach((r) => {
+            const rawDate = String(r["Date"] || "").trim();
+            if (!rawDate) return;
+            let mNum = 0, yNum = 0;
+            if (/^\d{4}[-/]\d{1,2}[-/]\d{1,2}/.test(rawDate)) {
+              const p = rawDate.split(/[-/]/);
+              yNum = parseInt(p[0], 10);
+              mNum = parseInt(p[1], 10);
+            } else if (/^\d{1,2}[-/]\d{1,2}[-/]\d{4}/.test(rawDate)) {
+              const p = rawDate.split(/[-/]/);
+              mNum = parseInt(p[1], 10);
+              yNum = parseInt(p[2], 10);
+            }
+
+            if (yNum === yr && mNum === mIdx) {
+              pCnt += 1;
+              uAmt += Number(r["UPI (₹)"] || 0);
+              cAmt += Number(r["Cash (₹)"] || 0);
+            }
+          });
+        } else {
+          // Fallback to local store
+          Object.entries(store).forEach(([dateLabel, items]) => {
+            const parts = dateLabel.split("-");
+            if (parts.length === 3) {
+              const itemYear = Number(parts[2]);
+              const itemMonth = Number(parts[1]);
+              if (itemYear === yr && itemMonth === mIdx) {
+                items.forEach((r: SavedReceiptItem) => {
+                  const amt = Number(r.receipt_amount || 0);
+                  pCnt += 1;
+                  if (isUpiMode(r.payment_mode)) {
+                    uAmt += amt;
+                  } else {
+                    cAmt += amt;
+                  }
+                });
+              }
+            }
+          });
+        }
+
+        months.push({
+          year: yr,
+          monthIdx: mIdx,
+          monthName: mName,
+          label: `${mName} ${yr}`,
+          patients: pCnt,
+          upiAmount: uAmt,
+          cashAmount: cAmt,
+          totalAmount: uAmt + cAmt,
+        });
+
+        totPts += pCnt;
+        totUpi += uAmt;
+        totCash += cAmt;
       });
 
-      months.push({
-        year: yr,
-        monthIdx: mIdx,
-        monthName: mName,
-        label: `${mName} ${yr}`,
-        patients: pCnt,
-        upiAmount: uAmt,
-        cashAmount: cAmt,
-        totalAmount: uAmt + cAmt,
-      });
+      if (isMounted) {
+        setFyData({
+          startYear: selectedStartYear,
+          endYear,
+          fyLabel: `FY_${selectedStartYear}-${String(endYear).slice(2)}`,
+          displayLabel: `FY ${selectedStartYear}-${String(endYear).slice(2)} (1st Apr ${selectedStartYear} to 31st Mar ${endYear})`,
+          months,
+          totals: {
+            totalPatients: totPts,
+            upiAmount: totUpi,
+            cashAmount: totCash,
+            grandTotal: totUpi + totCash,
+          },
+        });
+      }
+    };
 
-      totPts += pCnt;
-      totUpi += uAmt;
-      totCash += cAmt;
-    });
+    loadFyData();
 
-    const endYear = selectedStartYear + 1;
-    const fyLabel = `FY_${selectedStartYear}-${String(endYear).slice(2)}`;
-
-    setFyData({
-      startYear: selectedStartYear,
-      endYear,
-      fyLabel,
-      displayLabel: `FY ${selectedStartYear}-${String(endYear).slice(2)} (1st Apr ${selectedStartYear} to 31st Mar ${endYear})`,
-      months,
-      totals: {
-        totalPatients: totPts,
-        upiAmount: totUpi,
-        cashAmount: totCash,
-        grandTotal: totUpi + totCash,
-      },
-    });
+    return () => {
+      isMounted = false;
+    };
   }, [isOpen, selectedStartYear]);
 
   if (!isOpen || !fyData) return null;
