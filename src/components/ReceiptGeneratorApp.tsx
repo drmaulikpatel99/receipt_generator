@@ -300,34 +300,16 @@ export function ReceiptGeneratorApp() {
     });
   };
 
-  // Separate normal records vs advance records
-  const normalRecords: SupabasePaymentRecord[] = [];
-  const advByDate: Record<string, SupabasePaymentRecord[]> = {};
-
-  rawRecords.forEach((r) => {
-    const isAdv = Boolean(r.is_advance_booking);
-    const modeStr = (r.collected_mode || "") + " " + (r.collected_mode2 || "");
-    const isUpi = isUpiMode(modeStr);
-
-    if (isAdv && isUpi) {
-      const d = r.collected_date || "Unknown Date";
-      if (!advByDate[d]) advByDate[d] = [];
-      advByDate[d].push(r);
-    } else {
-      normalRecords.push(r);
-    }
-  });
-
-  const sortedAdvDates = Object.keys(advByDate).sort((a, b) => (a > b ? -1 : 1));
+  // Process all patient records (including advance bookings with patient names)
+  const normalRecords: SupabasePaymentRecord[] = rawRecords;
 
   // Compute Statistics
   let patientCount = normalRecords.length;
-  sortedAdvDates.forEach((d) => (patientCount += advByDate[d].length));
 
   let upiTotal = 0;
   let cashTotal = 0;
 
-  // Process Normal Records stats
+  // Process Records stats
   normalRecords.forEach((r) => {
     const pid = String(r.id);
     const state = rowStates[pid] || { amountStr: "", printed: Boolean(r.bill_printed) };
@@ -335,16 +317,6 @@ export function ReceiptGeneratorApp() {
 
     upiTotal += split.effectiveUpi;
     cashTotal += split.effectiveCash;
-  });
-
-  // Process Advance Booking groups stats
-  sortedAdvDates.forEach((dStr) => {
-    const group = advByDate[dStr];
-    const total = group.reduce(
-      (acc, curr) => acc + (curr.collected_today || 0) + (curr.collected_today2 || 0),
-      0
-    );
-    upiTotal += total;
   });
 
   const grandTotal = upiTotal + cashTotal;
@@ -388,13 +360,13 @@ export function ReceiptGeneratorApp() {
     const savedItems: SavedReceiptItem[] = [];
     let upiT = 0, cashT = 0, upiN = 0, cashN = 0;
 
-    // Normal records
+    // Normal and advance patient records
     normalRecords.forEach((r) => {
       const pid = String(r.id);
       const state = rowStates[pid] || { amountStr: "", printed: Boolean(r.bill_printed) };
       const split = calculateRecordSplit(r, state.printed, state.amountStr);
 
-      const isAdvance = Boolean(r.is_advance_booking);
+      const isAdvance = Boolean(r.is_advance_booking) || String(r.scan_description || "").toLowerCase().includes("advance");
       const origScan = isAdvance ? "Advance for Appointment" : cleanScanDescription(r.scan_description);
 
       let activeScan = origScan;
@@ -417,30 +389,6 @@ export function ReceiptGeneratorApp() {
 
       if (split.effectiveUpi > 0) { upiT += split.effectiveUpi; upiN += 1; }
       if (split.effectiveCash > 0) { cashT += split.effectiveCash; cashN += 1; }
-    });
-
-    // Advance groups date-wise
-    sortedAdvDates.forEach((dStr) => {
-      const group = advByDate[dStr];
-      const total = group.reduce(
-        (acc, curr) => acc + (curr.collected_today || 0) + (curr.collected_today2 || 0),
-        0
-      );
-      savedItems.push({
-        payment_id: `adv_${dStr.replace(/[-/]/g, "")}`,
-        patient_name: "Advance for Appointment",
-        scan: `${group.length} UPI booking(s)`,
-        payment_mode: "UPI",
-        total_charges: total,
-        bill_printed: false,
-        receipt_amount: total,
-        referring_doctor: "",
-        patient_phone: "",
-        date: dStr,
-        is_advance_group: true,
-      });
-      upiT += total;
-      upiN += group.length;
     });
 
     const dateLabel = formatDateDMY(parseYMD(fromYMD));
@@ -818,35 +766,6 @@ export function ReceiptGeneratorApp() {
                   </div>
                 );
               })}
-
-              {/* Advance Booking Group Cards */}
-              {sortedAdvDates.length > 0 && (
-                <div className="space-y-2 pt-2">
-                  <h4 className="text-xs font-bold text-indigo-900 uppercase tracking-wider px-1">
-                    📅 Advance Bookings Grouped Date-wise
-                  </h4>
-                  {sortedAdvDates.map((dStr) => {
-                    const group = advByDate[dStr];
-                    const groupTotal = group.reduce(
-                      (acc, curr) => acc + (curr.collected_today || 0) + (curr.collected_today2 || 0),
-                      0
-                    );
-                    return (
-                      <div key={`mob_adv_${dStr}`} className="bg-indigo-50 border border-indigo-200 p-3.5 rounded-2xl shadow-2xs flex items-center justify-between">
-                        <div>
-                          <span className="text-[10px] font-bold text-indigo-600">📅 {dStr}</span>
-                          <h5 className="font-bold text-sm text-indigo-950">Advance for Appointment</h5>
-                          <p className="text-xs text-indigo-700 font-semibold">{group.length} UPI booking(s)</p>
-                        </div>
-                        <div className="text-right">
-                          <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-200 text-emerald-900">UPI</span>
-                          <p className="text-sm font-black text-indigo-950 mt-1">₹{Math.round(groupTotal).toLocaleString()}</p>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
             </div>
 
             {/* 2. Desktop Table View (Visible on screens md and larger) */}
@@ -938,50 +857,6 @@ export function ReceiptGeneratorApp() {
                       </tr>
                     );
                   })}
-
-                  {/* Date-wise Grouped Advance Payments */}
-                  {sortedAdvDates.length > 0 && (
-                    <>
-                      <tr className="bg-indigo-100/70 text-indigo-900 text-xs font-bold uppercase tracking-wider">
-                        <td colSpan={7} className="py-2.5 px-4">
-                          📅 Advance Bookings Grouped Date-wise ({sortedAdvDates.length} date groups)
-                        </td>
-                      </tr>
-                      {sortedAdvDates.map((dStr) => {
-                        const group = advByDate[dStr];
-                        const groupTotal = group.reduce(
-                          (acc, curr) => acc + (curr.collected_today || 0) + (curr.collected_today2 || 0),
-                          0
-                        );
-                        return (
-                          <tr key={`adv_${dStr}`} className="bg-indigo-50/60 hover:bg-indigo-100/50 transition">
-                            <td className="py-3 px-4 text-xs font-bold text-indigo-800">{dStr}</td>
-                            <td className="py-3 px-4 font-bold text-indigo-950">
-                              Advance for Appointment ({group.length} booking(s))
-                            </td>
-                            <td className="py-3 px-4 text-slate-700 font-semibold">Advance for Appointment</td>
-                            <td className="py-3 px-4 text-center">
-                              <span className="px-2 py-0.5 rounded-full text-xs font-black bg-emerald-200 text-emerald-900">
-                                UPI
-                              </span>
-                            </td>
-                            <td className="py-3 px-4 text-right font-bold text-slate-700">
-                              ₹{Math.round(groupTotal).toLocaleString()}
-                            </td>
-                            <td className="py-3 px-4 text-center text-slate-400 text-xs">—</td>
-                            <td className="py-3 px-4 text-center">
-                              <input
-                                type="text"
-                                value={String(Math.round(groupTotal))}
-                                readOnly
-                                className="w-28 text-center py-1 rounded-lg font-bold text-sm bg-emerald-100/60 border border-emerald-300 text-emerald-900 cursor-not-allowed"
-                              />
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </>
-                  )}
                 </tbody>
               </table>
             </div>
