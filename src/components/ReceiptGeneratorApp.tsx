@@ -700,14 +700,14 @@ export function ReceiptGeneratorApp() {
                 type="date"
                 value={fromYMD}
                 onChange={(e) => setFromYMD(e.target.value)}
-                className="bg-transparent outline-none font-bold text-slate-800 text-xs"
+                className="bg-transparent outline-none font-bold text-slate-800 text-[16px] sm:text-xs"
               />
               <span className="text-slate-400">To</span>
               <input
                 type="date"
                 value={toYMD}
                 onChange={(e) => setToYMD(e.target.value)}
-                className="bg-transparent outline-none font-bold text-slate-800 text-xs"
+                className="bg-transparent outline-none font-bold text-slate-800 text-[16px] sm:text-xs"
               />
             </div>
 
@@ -850,7 +850,7 @@ export function ReceiptGeneratorApp() {
                           onChange={(e) => handleAmountChange(pid, e.target.value)}
                           disabled={split.isPureUpi || state.printed}
                           placeholder={String(Math.round(split.effectiveReceiptAmount))}
-                          className={`w-24 text-center py-1 rounded-xl font-bold text-xs border outline-none ${
+                          className={`w-24 text-center py-1 rounded-xl font-bold text-[16px] md:text-xs border outline-none ${
                             split.isPureUpi || state.printed
                               ? "bg-emerald-100/80 border-emerald-300 text-emerald-900 cursor-not-allowed"
                               : "bg-white border-amber-300 text-slate-900 shadow-2xs"
@@ -942,7 +942,7 @@ export function ReceiptGeneratorApp() {
                             onChange={(e) => handleAmountChange(pid, e.target.value)}
                             disabled={split.isPureUpi || state.printed}
                             placeholder={String(Math.round(split.effectiveReceiptAmount))}
-                            className={`w-28 text-center py-1 rounded-lg font-bold text-sm border outline-none transition ${
+                            className={`w-28 text-center py-1 rounded-lg font-bold text-[16px] md:text-sm border outline-none transition ${
                               split.isPureUpi || state.printed
                                 ? "bg-emerald-100/60 border-emerald-300 text-emerald-900 cursor-not-allowed"
                                 : "bg-white border-amber-300 focus:ring-2 focus:ring-amber-500 text-slate-900 shadow-2xs"
