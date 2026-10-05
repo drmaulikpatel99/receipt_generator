@@ -36,6 +36,7 @@ import {
   parseYMD,
   cleanScanDescription,
   isUpiMode,
+  getFinancialYear,
 } from "@/lib/utils";
 import { YearlySummaryModal } from "./YearlySummaryModal";
 import { SettingsAuthModal } from "./SettingsAuthModal";
@@ -75,10 +76,10 @@ export function ReceiptGeneratorApp() {
     });
   }, []);
 
-  // Load patient data from Supabase automatically
+  // Load patient data from Supabase + Financial Year Excel status from Drive
   const handleLoadData = async (from: string, to: string) => {
     setIsLoading(true);
-    setStatusMsg("⏳ Fetching records from database...");
+    setStatusMsg("⏳ Fetching records from database & Google Drive Excel...");
     try {
       const rawData = await fetchPaymentsByDateRange(from, to);
 
@@ -119,6 +120,31 @@ export function ReceiptGeneratorApp() {
         const amtVal = stored?.amount !== undefined && stored?.amount !== null ? String(Math.round(stored.amount)) : "";
         initialStates[pid] = { amountStr: amtVal, printed };
       });
+
+      // Fetch Master Excel status map from Google Drive for the Financial Year
+      const fy = getFinancialYear(from);
+      try {
+        const driveRes = await fetch(`/api/drive/excel-sync?fy=${fy}`);
+        if (driveRes.ok) {
+          const driveData = await driveRes.json();
+          if (driveData.success && driveData.statusMap) {
+            const driveMap = driveData.statusMap;
+            data.forEach((r) => {
+              const pid = String(r.id);
+              if (driveMap[pid]) {
+                const dAmt = driveMap[pid].amount;
+                const dPrinted = driveMap[pid].bill_printed;
+                const amtStr = dAmt !== null && dAmt !== undefined ? String(Math.round(dAmt)) : initialStates[pid]?.amountStr || "";
+                initialStates[pid] = { amountStr: amtStr, printed: dPrinted };
+                saveLocalStatus(pid, dAmt, dPrinted);
+              }
+            });
+            setDriveSyncStatus(`☁️ Synced with Master Excel (${fy})`);
+          }
+        }
+      } catch (excelErr) {
+        console.warn("Could not fetch Master Excel from Drive, using local cache:", excelErr);
+      }
 
       setRowStates(initialStates);
       setStatusMsg(`Loaded ${data.length} records • (${from} → ${to})`);
@@ -474,6 +500,28 @@ export function ReceiptGeneratorApp() {
       }
     }
 
+    // Sync Financial Year Master Excel to Google Drive
+    const fy = getFinancialYear(firstDateObj);
+    try {
+      const excelRes = await fetch("/api/drive/excel-sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fy,
+          dateLabel,
+          items: savedItems,
+        }),
+      });
+      const excelJson = await excelRes.json();
+      if (!excelJson.success) {
+        failedSyncs.push({ filename: `Master_Receipts_${fy}.xlsx`, error: excelJson.error || "Excel sync failed" });
+      } else {
+        setDriveSyncStatus(`☁️ Master Excel (${fy}) synced to Google Drive!`);
+      }
+    } catch (eErr: any) {
+      failedSyncs.push({ filename: `Master_Receipts_${fy}.xlsx`, error: eErr.message || String(eErr) });
+    }
+
     if (failedSyncs.length > 0) {
       const firstErr = failedSyncs[0].error || "Unknown error";
       alert(
@@ -481,8 +529,8 @@ export function ReceiptGeneratorApp() {
       );
       setStatusMsg(`⚠️ Saved locally, but Google Drive sync failed: ${firstErr}`);
     } else {
-      alert(`✅ Saved ${savedItems.length} receipt(s) locally and successfully synced all files to Google Drive!`);
-      setStatusMsg(`✅ Saved bills and synced to Google Drive for ${dateLabel}`);
+      alert(`✅ Saved ${savedItems.length} receipt(s) locally and successfully synced all files & Master Excel (${fy}) to Google Drive!`);
+      setStatusMsg(`✅ Saved bills and synced to Google Drive for ${dateLabel} (${fy})`);
     }
   };
 

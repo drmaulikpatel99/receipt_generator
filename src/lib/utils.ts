@@ -94,3 +94,44 @@ export function toSortableDate(dStr: string): string {
   }
   return dStr;
 }
+
+// ── Financial Year Helper (April 1 to March 31) ─────────────────────────────
+export function getFinancialYear(dateStr?: string | Date | null): string {
+  let dateObj: Date;
+  if (!dateStr) {
+    dateObj = new Date();
+  } else if (dateStr instanceof Date) {
+    dateObj = dateStr;
+  } else {
+    const s = String(dateStr).trim();
+    if (s.includes("-") || s.includes("/")) {
+      const parts = s.replace(/\//g, "-").split("-").map(Number);
+      if (parts[0] > 1000) {
+        // YYYY-MM-DD
+        dateObj = new Date(parts[0], parts[1] - 1, parts[2]);
+      } else {
+        // DD-MM-YYYY
+        dateObj = new Date(parts[2], parts[1] - 1, parts[0]);
+      }
+    } else {
+      dateObj = new Date(s);
+    }
+  }
+
+  if (isNaN(dateObj.getTime())) {
+    dateObj = new Date();
+  }
+
+  const year = dateObj.getFullYear();
+  const month = dateObj.getMonth() + 1; // 1..12
+
+  if (month >= 4) {
+    // April to December
+    const nextYearShort = String(year + 1).slice(-2);
+    return `FY${year}-${nextYearShort}`;
+  } else {
+    // January to March
+    const currentYearShort = String(year).slice(-2);
+    return `FY${year - 1}-${currentYearShort}`;
+  }
+}
