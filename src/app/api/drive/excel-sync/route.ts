@@ -28,8 +28,9 @@ function getDriveClient() {
   };
 }
 
-async function getOrCreateFolder(drive: any, name: string, parentId?: string): Promise<string> {
-  let q = `mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
+async function findFolder(drive: any, name: string, parentId?: string): Promise<string | null> {
+  const safeName = name.replace(/'/g, "\\'");
+  let q = `name = '${safeName}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
   if (parentId) {
     q += ` and '${parentId}' in parents`;
   }
@@ -50,6 +51,15 @@ async function getOrCreateFolder(drive: any, name: string, parentId?: string): P
     }
   }
 
+  return null;
+}
+
+async function getOrCreateFolder(drive: any, name: string, parentId?: string): Promise<string> {
+  const existingId = await findFolder(drive, name, parentId);
+  if (existingId) {
+    return existingId;
+  }
+
   const folderMetadata: any = {
     name,
     mimeType: "application/vnd.google-apps.folder",
@@ -66,7 +76,7 @@ async function getOrCreateFolder(drive: any, name: string, parentId?: string): P
   return folder.data.id!;
 }
 
-// GET: Read cash status & bill printed map from Financial Year Master Excel in Drive
+// GET: Read cash status & bill printed map from Financial Year Master Excel in Drive (READ ONLY)
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
@@ -79,9 +89,14 @@ export async function GET(req: NextRequest) {
     }
 
     const { drive, parentFolderId } = clientObj;
-    let targetFolderId = parentFolderId;
+    let targetFolderId: string | undefined = parentFolderId;
     if (fy) {
-      targetFolderId = await getOrCreateFolder(drive, fy, parentFolderId);
+      const foundId = await findFolder(drive, fy, parentFolderId);
+      if (!foundId) {
+        // Read-only: Folder does not exist yet -> return empty status map without creating empty folders!
+        return NextResponse.json({ success: true, statusMap: {}, fy, note: "Folder not created yet" });
+      }
+      targetFolderId = foundId;
     }
 
     let q = `name = '${filename}' and trashed = false`;
@@ -121,11 +136,13 @@ export async function GET(req: NextRequest) {
       const printedVal = String(row["Bill Printed"] || row["bill_printed"] || "").trim().toUpperCase();
       const isPrinted = printedVal === "YES" || printedVal === "TRUE" || printedVal === "1";
 
-      const amtRaw = row["Receipt Amount (₹)"] ?? row["receipt_amount"];
+      const cashRaw = row["Cash (₹)"] ?? row["cash_amount"];
+      const amtRaw = cashRaw ?? row["Receipt Amount (₹)"] ?? row["receipt_amount"];
       const amtNum = amtRaw !== null && amtRaw !== undefined && amtRaw !== "" ? Number(amtRaw) : null;
+      const finalAmt = (amtNum !== null && !isNaN(amtNum) && amtNum > 0) ? amtNum : null;
 
       statusMap[pid] = {
-        amount: isNaN(amtNum as number) ? null : amtNum,
+        amount: finalAmt,
         bill_printed: isPrinted,
       };
     });

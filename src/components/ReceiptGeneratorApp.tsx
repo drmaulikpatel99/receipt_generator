@@ -192,9 +192,12 @@ export function ReceiptGeneratorApp() {
               if (driveMap[pid]) {
                 const dAmt = driveMap[pid].amount;
                 const dPrinted = driveMap[pid].bill_printed;
-                const amtStr = dAmt !== null && dAmt !== undefined ? String(Math.round(dAmt)) : initialStates[pid]?.amountStr || "";
-                initialStates[pid] = { amountStr: amtStr, printed: dPrinted };
-                saveLocalStatus(pid, dAmt, dPrinted);
+                const amtStr = dAmt !== null && dAmt !== undefined && dAmt > 0
+                  ? String(Math.round(dAmt))
+                  : initialStates[pid]?.amountStr || "";
+                const printed = dPrinted || initialStates[pid]?.printed || false;
+                initialStates[pid] = { amountStr: amtStr, printed };
+                saveLocalStatus(pid, dAmt, printed);
               }
             });
             setDriveSyncStatus(`☁️ Synced with Master Excel (${fy})`);
