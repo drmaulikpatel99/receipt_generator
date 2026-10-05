@@ -404,56 +404,103 @@ export function ReceiptGeneratorApp() {
       }
     });
 
-    const dateLabel = formatDateDMY(parseYMD(fromYMD));
-    saveBillsToStore(dateLabel, savedItems);
-
     const firstDateObj = parseYMD(fromYMD);
-    const yearStr = String(firstDateObj.getFullYear());
-    const monthName = MONTH_NAMES[firstDateObj.getMonth() + 1];
-
     const failedSyncs: { filename: string; error?: string }[] = [];
 
-    // Generate individual receipts sequentially
-    for (const item of savedItems) {
-      if (item.is_advance_group) continue;
-      const receiptTxt = generatePatientTextReceipt(item);
-      const sanName = item.patient_name.replace(/[^a-z0-9]/gi, "_").substring(0, 20);
-      const filename = `Receipt_${item.payment_id}_${sanName}.txt`;
+    // Helper to group saved items by their actual date
+    const itemsByDate: Record<
+      string,
+      { items: SavedReceiptItem[]; dateObj: Date; yearStr: string; monthName: string }
+    > = {};
 
-      const res = await syncToDrive(filename, receiptTxt, [
+    savedItems.forEach((item) => {
+      let dObj = firstDateObj;
+      if (item.date) {
+        const str = String(item.date).trim();
+        if (/^\d{4}[-/]\d{1,2}[-/]\d{1,2}/.test(str)) {
+          dObj = parseYMD(str.substring(0, 10));
+        } else if (/^\d{1,2}[-/]\d{1,2}[-/]\d{4}/.test(str)) {
+          const p = str.split(/[-/]/);
+          const d = parseInt(p[0], 10);
+          const m = parseInt(p[1], 10) - 1;
+          const y = parseInt(p[2], 10);
+          dObj = new Date(y, m, d);
+        }
+      }
+      const dLabel = formatDateDMY(dObj);
+      const yStr = String(dObj.getFullYear());
+      const mName = MONTH_NAMES[dObj.getMonth() + 1];
+
+      if (!itemsByDate[dLabel]) {
+        itemsByDate[dLabel] = { items: [], dateObj: dObj, yearStr: yStr, monthName: mName };
+      }
+      itemsByDate[dLabel].items.push(item);
+    });
+
+    // Save items day-by-day to local store & sync individual receipts & daily summary per day
+    for (const [dLabel, dayGroup] of Object.entries(itemsByDate)) {
+      saveBillsToStore(dLabel, dayGroup.items);
+
+      // 1. Generate individual receipts for this day
+      for (const item of dayGroup.items) {
+        if (item.is_advance_group) continue;
+        const receiptTxt = generatePatientTextReceipt(item);
+        const sanName = item.patient_name.replace(/[^a-z0-9]/gi, "_").substring(0, 20);
+        const filename = `Receipt_${item.payment_id}_${sanName}.txt`;
+
+        const res = await syncToDrive(filename, receiptTxt, [
+          "Saved_Receipts",
+          dayGroup.yearStr,
+          dayGroup.monthName,
+          dLabel,
+          "Individual_Receipts",
+        ]);
+        if (!res.success) {
+          failedSyncs.push({ filename, error: res.error });
+        }
+      }
+
+      // 2. Generate Daily Summary Report for this day
+      let dUpiT = 0, dCashT = 0, dUpiN = 0, dCashN = 0;
+      dayGroup.items.forEach((it) => {
+        if (it.upi_amount && it.upi_amount > 0) {
+          dUpiT += it.upi_amount;
+          dUpiN += 1;
+        }
+        if (it.cash_amount && it.cash_amount > 0) {
+          dCashT += it.cash_amount;
+          if (!it.upi_amount || it.upi_amount === 0) dCashN += 1;
+        }
+      });
+
+      const daySummaryObj: DaySummary = {
+        period: dLabel,
+        saved_at: new Date().toLocaleString(),
+        totals: {
+          total_patients: dayGroup.items.length,
+          upi_patients: dUpiN,
+          cash_patients: dCashN,
+          upi_amount: dUpiT,
+          cash_amount: dCashT,
+          grand_total: dUpiT + dCashT,
+        },
+        records: dayGroup.items,
+      };
+      const daySummaryTxt = generateDailyTextReport(daySummaryObj);
+      const summaryFilename = `summary_${dLabel}.txt`;
+      const dayRes = await syncToDrive(summaryFilename, daySummaryTxt, [
         "Saved_Receipts",
-        yearStr,
-        monthName,
-        dateLabel,
-        "Individual_Receipts",
+        dayGroup.yearStr,
+        dayGroup.monthName,
+        dLabel,
       ]);
-      if (!res.success) {
-        failedSyncs.push({ filename, error: res.error });
+      if (!dayRes.success) {
+        failedSyncs.push({ filename: summaryFilename, error: dayRes.error });
       }
     }
 
-    // Generate Daily Summary Report
-    const daySummaryObj: DaySummary = {
-      period: dateLabel,
-      saved_at: new Date().toLocaleString(),
-      totals: {
-        total_patients: savedItems.length,
-        upi_patients: upiN,
-        cash_patients: cashN,
-        upi_amount: upiT,
-        cash_amount: cashT,
-        grand_total: upiT + cashT,
-      },
-      records: savedItems,
-    };
-    const daySummaryTxt = generateDailyTextReport(daySummaryObj);
-    const summaryFilename = `summary_${dateLabel}.txt`;
-    const dayRes = await syncToDrive(summaryFilename, daySummaryTxt, ["Saved_Receipts", yearStr, monthName, dateLabel]);
-    if (!dayRes.success) {
-      failedSyncs.push({ filename: summaryFilename, error: dayRes.error });
-    }
-
     // Sync Financial Year Master Excel to Google Drive
+    const primaryDateLabel = formatDateDMY(firstDateObj);
     const fy = getFinancialYear(firstDateObj);
     let masterExcelRows: any[] = [];
     try {
@@ -462,7 +509,7 @@ export function ReceiptGeneratorApp() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           fy,
-          dateLabel,
+          dateLabel: primaryDateLabel,
           items: savedItems,
         }),
       });
@@ -582,6 +629,8 @@ export function ReceiptGeneratorApp() {
     });
 
     const totalDaysSaved = Object.keys(daysSummaryMap).length;
+    const yearStr = String(firstDateObj.getFullYear());
+    const monthName = MONTH_NAMES[firstDateObj.getMonth() + 1];
 
     if (totalDaysSaved > 0) {
       const monthlySummaryObj: MonthlySummaryData = {
@@ -615,7 +664,7 @@ export function ReceiptGeneratorApp() {
       setStatusMsg(`⚠️ Saved locally, but Google Drive sync failed: ${firstErr}`);
     } else {
       alert(`✅ Saved ${savedItems.length} receipt(s) locally and successfully synced all files & Master Excel (${fy}) to Google Drive!`);
-      setStatusMsg(`✅ Saved bills and synced to Google Drive for ${dateLabel} (${fy})`);
+      setStatusMsg(`✅ Saved bills and synced to Google Drive for ${primaryDateLabel} (${fy})`);
     }
   };
 
