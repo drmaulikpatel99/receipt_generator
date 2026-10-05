@@ -62,13 +62,22 @@ export function calculateRecordSplit(
   const cashPortion = (!isUpi1 ? c1 : 0) + (!isUpi2 ? c2 : 0);
   const totalCharges = c1 + c2;
 
+  const isPureUpi = upiPortion > 0 && cashPortion === 0;
+  const isPureCash = cashPortion > 0 && upiPortion === 0;
+  const isSplit = upiPortion > 0 && cashPortion > 0;
+
   let effectiveReceiptAmount = 0;
   let effectiveUpi = upiPortion;
   let effectiveCash = 0;
 
-  if (printed) {
+  if (isPureUpi) {
+    effectiveReceiptAmount = totalCharges;
+    effectiveUpi = totalCharges;
+    effectiveCash = 0;
+  } else if (printed) {
     // If Bill IS Printed -> Include WHOLE amount (Cash + UPI)
     effectiveReceiptAmount = totalCharges;
+    effectiveUpi = upiPortion;
     effectiveCash = cashPortion;
   } else {
     // If Bill is NOT Printed -> Include ONLY UPI Portion unless manual cash is entered
@@ -77,6 +86,7 @@ export function calculateRecordSplit(
       effectiveReceiptAmount = upiPortion + effectiveCash;
     } else {
       effectiveReceiptAmount = upiPortion;
+      effectiveUpi = upiPortion;
       effectiveCash = 0; // Exclude cash portion
     }
   }
@@ -85,6 +95,9 @@ export function calculateRecordSplit(
     upiPortion,
     cashPortion,
     totalCharges,
+    isPureUpi,
+    isPureCash,
+    isSplit,
     effectiveReceiptAmount,
     effectiveUpi,
     effectiveCash,
@@ -736,17 +749,19 @@ export function ReceiptGeneratorApp() {
               {/* Normal Records Cards */}
               {normalRecords.map((r) => {
                 const pid = String(r.id);
-                const modeStr = (r.collected_mode || "") + " " + (r.collected_mode2 || "");
-                const isUpi = isUpiMode(modeStr);
                 const state = rowStates[pid] || { amountStr: "", printed: Boolean(r.bill_printed) };
-                const totalCharges = (r.collected_today || 0) + (r.collected_today2 || 0);
+                const split = calculateRecordSplit(r, state.printed, state.amountStr);
 
                 const isAdvance = Boolean(r.is_advance_booking);
                 const origScan = isAdvance
                   ? "Advance for Appointment"
                   : cleanScanDescription(r.scan_description);
 
-                const cardBg = isUpi || state.printed ? "bg-emerald-50/70 border-emerald-200" : "bg-amber-50/70 border-amber-200";
+                const cardBg = split.isPureUpi || state.printed ? "bg-emerald-50/70 border-emerald-200" : "bg-amber-50/70 border-amber-200";
+
+                const modeTag = split.isSplit
+                  ? `UPI ₹${Math.round(split.upiPortion)} + Cash ₹${Math.round(split.cashPortion)}`
+                  : (r.collected_mode || "Cash");
 
                 return (
                   <div key={`mob_${pid}`} className={`p-3.5 rounded-2xl border shadow-2xs space-y-2.5 ${cardBg}`}>
@@ -758,19 +773,19 @@ export function ReceiptGeneratorApp() {
                       </div>
 
                       <div className="text-right">
-                        <span className={`inline-block px-2.5 py-0.5 rounded-full text-xs font-extrabold ${isUpi ? "bg-emerald-200 text-emerald-900" : "bg-amber-200 text-amber-900"}`}>
-                          {r.collected_mode || "Cash"}
+                        <span className={`inline-block px-2.5 py-0.5 rounded-full text-xs font-extrabold ${split.isPureUpi ? "bg-emerald-200 text-emerald-900" : split.isSplit ? "bg-blue-200 text-blue-900" : "bg-amber-200 text-amber-900"}`}>
+                          {modeTag}
                         </span>
-                        <p className="text-sm font-black text-slate-900 mt-1">₹{Math.round(totalCharges).toLocaleString()}</p>
+                        <p className="text-sm font-black text-slate-900 mt-1">₹{Math.round(split.totalCharges).toLocaleString()}</p>
                       </div>
                     </div>
 
                     <div className="flex items-center justify-between pt-2 border-t border-slate-200/60 text-xs">
                       <div className="flex items-center gap-1.5">
                         <span className="font-bold text-slate-600">Bill Printed:</span>
-                        {!isUpi ? (
+                        {!split.isPureUpi ? (
                           <button
-                            onClick={() => handleTogglePrinted(pid, isUpi, totalCharges)}
+                            onClick={() => handleTogglePrinted(pid, split.isPureUpi, split.totalCharges)}
                             className="focus:outline-none p-1"
                           >
                             {state.printed ? (
@@ -790,10 +805,10 @@ export function ReceiptGeneratorApp() {
                           type="text"
                           value={state.amountStr}
                           onChange={(e) => handleAmountChange(pid, e.target.value)}
-                          disabled={isUpi || state.printed}
-                          placeholder={isUpi || state.printed ? String(Math.round(totalCharges)) : "Manual ₹"}
+                          disabled={split.isPureUpi || state.printed}
+                          placeholder={String(Math.round(split.effectiveReceiptAmount))}
                           className={`w-24 text-center py-1 rounded-xl font-bold text-xs border outline-none ${
-                            isUpi || state.printed
+                            split.isPureUpi || state.printed
                               ? "bg-emerald-100/80 border-emerald-300 text-emerald-900 cursor-not-allowed"
                               : "bg-white border-amber-300 text-slate-900 shadow-2xs"
                           }`}
@@ -853,10 +868,8 @@ export function ReceiptGeneratorApp() {
                   {/* Normal Payment Rows */}
                   {normalRecords.map((r) => {
                     const pid = String(r.id);
-                    const modeStr = (r.collected_mode || "") + " " + (r.collected_mode2 || "");
-                    const isUpi = isUpiMode(modeStr);
                     const state = rowStates[pid] || { amountStr: "", printed: Boolean(r.bill_printed) };
-                    const totalCharges = (r.collected_today || 0) + (r.collected_today2 || 0);
+                    const split = calculateRecordSplit(r, state.printed, state.amountStr);
 
                     const isAdvance = Boolean(r.is_advance_booking);
                     const origScan = isAdvance
@@ -864,9 +877,13 @@ export function ReceiptGeneratorApp() {
                       : cleanScanDescription(r.scan_description);
 
                     const rowBgClass =
-                      isUpi || state.printed
+                      split.isPureUpi || state.printed
                         ? "bg-emerald-50/60 hover:bg-emerald-100/50"
                         : "bg-amber-50/50 hover:bg-amber-100/40";
+
+                    const modeTag = split.isSplit
+                      ? `UPI ₹${Math.round(split.upiPortion)} + Cash ₹${Math.round(split.cashPortion)}`
+                      : (r.collected_mode || "Cash");
 
                     return (
                       <tr key={pid} className={`${rowBgClass} transition`}>
@@ -878,19 +895,19 @@ export function ReceiptGeneratorApp() {
                         <td className="py-3.5 px-4 text-center">
                           <span
                             className={`px-2.5 py-1 rounded-full text-xs font-extrabold ${
-                              isUpi ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"
+                              split.isPureUpi ? "bg-emerald-100 text-emerald-800" : split.isSplit ? "bg-blue-100 text-blue-800" : "bg-amber-100 text-amber-800"
                             }`}
                           >
-                            {r.collected_mode || "Cash"}
+                            {modeTag}
                           </span>
                         </td>
                         <td className="py-3.5 px-4 text-right font-bold text-slate-800">
-                          ₹{Math.round(totalCharges).toLocaleString()}
+                          ₹{Math.round(split.totalCharges).toLocaleString()}
                         </td>
                         <td className="py-3.5 px-4 text-center">
-                          {!isUpi ? (
+                          {!split.isPureUpi ? (
                             <button
-                              onClick={() => handleTogglePrinted(pid, isUpi, totalCharges)}
+                              onClick={() => handleTogglePrinted(pid, split.isPureUpi, split.totalCharges)}
                               className="focus:outline-none hover:scale-110 transition active:scale-95"
                               title="Toggle Bill Printed Status"
                             >
@@ -909,10 +926,10 @@ export function ReceiptGeneratorApp() {
                             type="text"
                             value={state.amountStr}
                             onChange={(e) => handleAmountChange(pid, e.target.value)}
-                            disabled={isUpi || state.printed}
-                            placeholder={isUpi || state.printed ? String(Math.round(totalCharges)) : "Manual ₹"}
+                            disabled={split.isPureUpi || state.printed}
+                            placeholder={String(Math.round(split.effectiveReceiptAmount))}
                             className={`w-28 text-center py-1 rounded-lg font-bold text-sm border outline-none transition ${
-                              isUpi || state.printed
+                              split.isPureUpi || state.printed
                                 ? "bg-emerald-100/60 border-emerald-300 text-emerald-900 cursor-not-allowed"
                                 : "bg-white border-amber-300 focus:ring-2 focus:ring-amber-500 text-slate-900 shadow-2xs"
                             }`}
