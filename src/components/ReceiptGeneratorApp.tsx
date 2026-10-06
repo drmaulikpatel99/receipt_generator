@@ -444,6 +444,11 @@ export function ReceiptGeneratorApp() {
       const state = rowStates[pid] || { amountStr: "", printed: Boolean(r.bill_printed) };
       const split = calculateRecordSplit(r, state.printed, state.amountStr);
 
+      // Exclude patients with ₹0 effective payment (e.g. unprinted cash bill with 0 entered)
+      if (split.effectiveReceiptAmount === 0) {
+        return;
+      }
+
       const isAdvance = Boolean(r.is_advance_booking) || String(r.scan_description || "").toLowerCase().includes("advance");
       const origScan = isAdvance ? "Advance for Appointment" : cleanScanDescription(r.scan_description);
 
