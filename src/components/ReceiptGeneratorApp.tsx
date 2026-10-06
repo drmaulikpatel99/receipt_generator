@@ -24,6 +24,7 @@ import {
   saveBillsToStore,
   generateDailyTextReport,
   generateMonthlyTextReport,
+  generateMonthlyExcelBase64,
   generatePatientTextReceipt,
   SavedReceiptItem,
   DaySummary,
@@ -324,18 +325,20 @@ export function ReceiptGeneratorApp() {
 
   const grandTotal = upiTotal + cashTotal;
 
-  // Helper: Auto-sync generated text reports to Google Drive API
+  // Helper: Auto-sync generated reports to Google Drive API
   const syncToDrive = async (
     filename: string,
     content: string,
-    subfolderPath: string[] = []
+    subfolderPath: string[] = [],
+    mimeType: string = "text/plain",
+    isBase64: boolean = false
   ): Promise<{ success: boolean; error?: string }> => {
     try {
       setDriveSyncStatus(`☁️ Syncing ${filename}...`);
       const resp = await fetch("/api/drive/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ filename, content, folderPath: subfolderPath }),
+        body: JSON.stringify({ filename, content, folderPath: subfolderPath, mimeType, isBase64 }),
       });
       const resData = await resp.json();
       if (resp.ok && resData.success && !resData.simulated) {
@@ -648,11 +651,26 @@ export function ReceiptGeneratorApp() {
           grand_total: monthlyUpiT + monthlyCashT,
         },
       };
+      // 1. Text Summary File (.txt)
       const mSummaryTxt = generateMonthlyTextReport(monthlySummaryObj);
-      const monthlyFilename = `Monthly_Summary_${monthName}_${yearStr}.txt`;
-      const monthRes = await syncToDrive(monthlyFilename, mSummaryTxt, ["Saved_Receipts", yearStr, monthName]);
-      if (!monthRes.success) {
-        failedSyncs.push({ filename: monthlyFilename, error: monthRes.error });
+      const monthlyFilenameTxt = `Monthly_Summary_${monthName}_${yearStr}.txt`;
+      const monthTxtRes = await syncToDrive(monthlyFilenameTxt, mSummaryTxt, ["Saved_Receipts", yearStr, monthName]);
+      if (!monthTxtRes.success) {
+        failedSyncs.push({ filename: monthlyFilenameTxt, error: monthTxtRes.error });
+      }
+
+      // 2. Excel Summary File (.xlsx)
+      const mSummaryBase64 = generateMonthlyExcelBase64(monthlySummaryObj);
+      const monthlyFilenameXlsx = `Monthly_Summary_${monthName}_${yearStr}.xlsx`;
+      const monthXlsxRes = await syncToDrive(
+        monthlyFilenameXlsx,
+        mSummaryBase64,
+        ["Saved_Receipts", yearStr, monthName],
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        true
+      );
+      if (!monthXlsxRes.success) {
+        failedSyncs.push({ filename: monthlyFilenameXlsx, error: monthXlsxRes.error });
       }
     }
 

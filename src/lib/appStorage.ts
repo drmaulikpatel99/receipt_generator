@@ -1,4 +1,5 @@
 import { amountInWords } from "./utils";
+import * as XLSX from "xlsx";
 
 export interface ReceiptStatusRecord {
   amount: number | null;
@@ -165,6 +166,52 @@ export function generateMonthlyTextReport(mdata: MonthlySummaryData): string {
     "=".repeat(72)
   );
   return lines.join("\n");
+}
+
+export function generateMonthlyExcelBase64(mdata: MonthlySummaryData): string {
+  const rows: any[] = [];
+
+  const daysDict = mdata.days || {};
+  Object.keys(daysDict).sort().forEach((dKey) => {
+    const dt = daysDict[dKey]?.totals || { upi_amount: 0, cash_amount: 0, grand_total: 0 };
+    rows.push({
+      "Date": dKey,
+      "UPI Collection (₹)": Math.round(dt.upi_amount || 0),
+      "Cash Collection (₹)": Math.round(dt.cash_amount || 0),
+      "Day Total (₹)": Math.round(dt.grand_total || 0),
+    });
+  });
+
+  const mt = mdata.monthly_totals;
+
+  // Add empty separator row
+  rows.push({
+    "Date": "",
+    "UPI Collection (₹)": "",
+    "Cash Collection (₹)": "",
+    "Day Total (₹)": "",
+  });
+
+  // Add Totals row
+  rows.push({
+    "Date": `TOTALS (${mt.total_days_saved} days)`,
+    "UPI Collection (₹)": Math.round(mt.upi_amount || 0),
+    "Cash Collection (₹)": Math.round(mt.cash_amount || 0),
+    "Day Total (₹)": Math.round(mt.grand_total || 0),
+  });
+
+  const worksheet = XLSX.utils.json_to_sheet(rows);
+  worksheet["!cols"] = [
+    { wch: 24 }, // Date / Label
+    { wch: 22 }, // UPI Collection (₹)
+    { wch: 22 }, // Cash Collection (₹)
+    { wch: 20 }, // Day Total (₹)
+  ];
+
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, `Summary_${mdata.month}_${mdata.year}`);
+
+  return XLSX.write(workbook, { type: "base64", bookType: "xlsx" });
 }
 
 export function generatePatientTextReceipt(r: SavedReceiptItem): string {

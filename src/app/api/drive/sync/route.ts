@@ -105,9 +105,12 @@ export async function POST(req: NextRequest) {
       includeItemsFromAllDrives: true,
     });
 
+    const isBase64 = body.isBase64 || false;
+    const fileBuffer = isBase64 ? Buffer.from(content, "base64") : Buffer.from(content);
+
     const media = {
       mimeType: mimeType,
-      body: Readable.from([content]),
+      body: Readable.from([fileBuffer]),
     };
 
     if (existingFiles.data.files && existingFiles.data.files.length > 0) {
