@@ -122,6 +122,7 @@ export function ReceiptGeneratorApp() {
   const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null);
 
   const [driveSyncStatus, setDriveSyncStatus] = useState<string>("");
+  const [failedSyncPids, setFailedSyncPids] = useState<Record<string, string>>({});
 
   // Check auth user on mount
   useEffect(() => {
@@ -356,6 +357,76 @@ export function ReceiptGeneratorApp() {
     }
   };
 
+  // Retry single patient receipt sync to Google Drive
+  const handleRetryPatientSync = async (r: SupabasePaymentRecord) => {
+    const pid = String(r.id);
+    const state = rowStates[pid] || { amountStr: "", printed: Boolean(r.bill_printed) };
+    const split = calculateRecordSplit(r, state.printed, state.amountStr);
+
+    const isAdvance = Boolean(r.is_advance_booking) || String(r.scan_description || "").toLowerCase().includes("advance");
+    const origScan = isAdvance ? "Advance for Appointment" : cleanScanDescription(r.scan_description);
+
+    let activeScan = origScan;
+    if (!isUpiMode(r.collected_mode) && !state.printed && state.amountStr && Number(state.amountStr) > 0) {
+      activeScan = "Fetal Well Being";
+    }
+
+    const item: SavedReceiptItem = {
+      payment_id: pid,
+      patient_name: r.patient_name || "—",
+      scan: activeScan,
+      payment_mode: r.collected_mode || "—",
+      total_charges: split.totalCharges,
+      bill_printed: state.printed,
+      receipt_amount: split.effectiveReceiptAmount,
+      cash_amount: split.effectiveCash,
+      upi_amount: split.effectiveUpi,
+      referring_doctor: r.referring_doctor || "",
+      patient_phone: r.patient_phone || "",
+      date: r.collected_date || "",
+    };
+
+    let dObj = parseYMD(fromYMD);
+    if (item.date) {
+      const str = String(item.date).trim();
+      if (/^\d{4}[-/]\d{1,2}[-/]\d{1,2}/.test(str)) {
+        dObj = parseYMD(str.substring(0, 10));
+      } else if (/^\d{1,2}[-/]\d{1,2}[-/]\d{4}/.test(str)) {
+        const p = str.split(/[-/]/);
+        const d = parseInt(p[0], 10);
+        const m = parseInt(p[1], 10) - 1;
+        const y = parseInt(p[2], 10);
+        dObj = new Date(y, m, d);
+      }
+    }
+    const dateLabel = formatDateDMY(dObj);
+    const yearStr = String(dObj.getFullYear());
+    const monthName = MONTH_NAMES[dObj.getMonth() + 1];
+
+    const receiptTxt = generatePatientTextReceipt(item);
+    const sanName = item.patient_name.replace(/[^a-z0-9]/gi, "_").substring(0, 20);
+    const filename = `Receipt_${item.payment_id}_${sanName}.txt`;
+
+    const res = await syncToDrive(filename, receiptTxt, [
+      "Saved_Receipts",
+      yearStr,
+      monthName,
+      dateLabel,
+      "Individual_Receipts",
+    ]);
+
+    if (res.success) {
+      setFailedSyncPids((prev) => {
+        const copy = { ...prev };
+        delete copy[pid];
+        return copy;
+      });
+      alert(`✅ Google Drive sync succeeded for ${item.patient_name}!`);
+    } else {
+      alert(`❌ Retry failed for ${item.patient_name}: ${res.error || "Drive sync error"}`);
+    }
+  };
+
   // Save Bills Action
   const handleSaveBills = async () => {
     if (rawRecords.length === 0) {
@@ -365,6 +436,7 @@ export function ReceiptGeneratorApp() {
 
     const savedItems: SavedReceiptItem[] = [];
     let upiT = 0, cashT = 0, upiN = 0, cashN = 0;
+    const newFailedPids: Record<string, string> = {};
 
     // Normal and advance patient records
     normalRecords.forEach((r) => {
@@ -460,6 +532,7 @@ export function ReceiptGeneratorApp() {
         ]);
         if (!res.success) {
           failedSyncs.push({ filename, error: res.error });
+          newFailedPids[item.payment_id] = res.error || "Drive sync failed";
         }
       }
 
@@ -673,6 +746,8 @@ export function ReceiptGeneratorApp() {
         failedSyncs.push({ filename: monthlyFilenameXlsx, error: monthXlsxRes.error });
       }
     }
+
+    setFailedSyncPids(newFailedPids);
 
     if (failedSyncs.length > 0) {
       const firstErr = failedSyncs[0].error || "Unknown error";
@@ -925,6 +1000,18 @@ export function ReceiptGeneratorApp() {
                         />
                       </div>
                     </div>
+
+                    {failedSyncPids[pid] && (
+                      <div className="flex items-center justify-between bg-red-100/90 border border-red-300 rounded-xl px-2.5 py-1 text-xs text-red-900 font-bold mt-1">
+                        <span className="truncate pr-2" title={failedSyncPids[pid]}>⚠️ Drive Sync Failed</span>
+                        <button
+                          onClick={() => handleRetryPatientSync(r)}
+                          className="bg-red-600 hover:bg-red-700 text-white font-extrabold px-2.5 py-0.5 rounded-lg text-xs transition shadow-2xs shrink-0"
+                        >
+                          🔄 Retry
+                        </button>
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -971,7 +1058,26 @@ export function ReceiptGeneratorApp() {
                         <td className="py-3.5 px-4 text-xs font-semibold text-slate-500">
                           {r.collected_date || "—"}
                         </td>
-                        <td className="py-3.5 px-4 font-bold text-slate-900">{r.patient_name || "—"}</td>
+                        <td className="py-3.5 px-4 font-bold text-slate-900">
+                          <div className="flex items-center gap-2">
+                            <span>{r.patient_name || "—"}</span>
+                            {failedSyncPids[pid] && (
+                              <span
+                                className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-extrabold bg-red-100 text-red-900 border border-red-300 shadow-2xs"
+                                title={failedSyncPids[pid]}
+                              >
+                                ⚠️ Drive Sync Failed
+                                <button
+                                  onClick={() => handleRetryPatientSync(r)}
+                                  className="bg-red-600 hover:bg-red-700 text-white font-black px-2 py-0.5 rounded-md text-[10px] ml-0.5 transition active:scale-95"
+                                  title="Retry Google Drive sync for this receipt"
+                                >
+                                  🔄 Retry
+                                </button>
+                              </span>
+                            )}
+                          </div>
+                        </td>
                         <td className="py-3.5 px-4 text-slate-700 font-medium">{origScan}</td>
                         <td className="py-3.5 px-4 text-center">
                           <span
