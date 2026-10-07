@@ -12,11 +12,14 @@ import {
   Sparkles,
   Settings,
   Lock,
+  LogOut,
 } from "lucide-react";
 import {
   fetchPaymentsByDateRange,
   SupabasePaymentRecord,
   getCurrentUser,
+  loginWithSupabase,
+  logoutSupabase,
 } from "@/lib/supabase";
 import {
   loadLocalStatus,
@@ -120,21 +123,77 @@ export function ReceiptGeneratorApp() {
   const [isFYModalOpen, setIsFYModalOpen] = useState<boolean>(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
   const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null);
+  const [isAuthChecking, setIsAuthChecking] = useState<boolean>(true);
+
+  // Login Gate State
+  const [loginEmail, setLoginEmail] = useState<string>("");
+  const [loginPassword, setLoginPassword] = useState<string>("");
+  const [loginError, setLoginError] = useState<string>("");
+  const [isLoggingIn, setIsLoggingIn] = useState<boolean>(false);
 
   const [driveSyncStatus, setDriveSyncStatus] = useState<string>("");
   const [failedSyncPids, setFailedSyncPids] = useState<Record<string, string>>({});
 
   // Check auth user on mount
   useEffect(() => {
-    getCurrentUser().then((user) => {
-      if (user?.email) {
-        setCurrentUserEmail(user.email);
-      } else {
-        const localEmail = typeof window !== "undefined" ? localStorage.getItem("sb_email") : null;
-        setCurrentUserEmail(localEmail || null);
+    async function checkAuth() {
+      try {
+        const user = await getCurrentUser();
+        if (user?.email) {
+          setCurrentUserEmail(user.email);
+          handleLoadData(todayYMD, todayYMD);
+        } else {
+          setCurrentUserEmail(null);
+          if (typeof window !== "undefined") {
+            const savedEmail = localStorage.getItem("sb_email") || "";
+            setLoginEmail(savedEmail);
+          }
+        }
+      } catch (err) {
+        console.error("Auth check error:", err);
+        setCurrentUserEmail(null);
+      } finally {
+        setIsAuthChecking(false);
       }
-    });
+    }
+    checkAuth();
   }, []);
+
+  const handleGateLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!loginEmail.trim() || !loginPassword.trim()) {
+      setLoginError("Please enter both Email and Password");
+      return;
+    }
+
+    setIsLoggingIn(true);
+    setLoginError("");
+    try {
+      const res = await loginWithSupabase(loginEmail, loginPassword);
+      if (res?.user?.email) {
+        setCurrentUserEmail(res.user.email);
+        setLoginPassword("");
+        handleLoadData(todayYMD, todayYMD);
+      }
+    } catch (err: any) {
+      console.error("Gate login failed:", err);
+      setLoginError(err.message || "Invalid Email or Password");
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    try {
+      await logoutSupabase();
+    } catch (err) {
+      console.error("Logout error:", err);
+    }
+    setCurrentUserEmail(null);
+    setRawRecords([]);
+    setStatusMsg("Signed out. Please log in.");
+    setIsSettingsOpen(false);
+  };
 
   // Load patient data from Supabase + Financial Year Excel status from Drive
   const handleLoadData = async (from: string, to: string) => {
@@ -225,21 +284,17 @@ export function ReceiptGeneratorApp() {
     }
   };
 
-  // Initial load on mount only (for Today)
-  useEffect(() => {
-    handleLoadData(todayYMD, todayYMD);
-  }, []);
+
 
   const refreshAuthUser = () => {
     getCurrentUser().then((user) => {
       if (user?.email) {
         setCurrentUserEmail(user.email);
+        handleLoadData(fromYMD, toYMD);
       } else {
-        const localEmail = typeof window !== "undefined" ? localStorage.getItem("sb_email") : null;
-        setCurrentUserEmail(localEmail || null);
+        setCurrentUserEmail(null);
       }
     });
-    handleLoadData(fromYMD, toYMD);
   };
 
   // Quick Date Range Selectors
@@ -766,6 +821,111 @@ export function ReceiptGeneratorApp() {
     }
   };
 
+  // ── Auth Loading State ──
+  if (isAuthChecking) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4">
+        <div className="flex flex-col items-center gap-3 bg-white p-8 rounded-3xl border border-slate-200 shadow-sm max-w-xs w-full text-center">
+          <div className="w-9 h-9 border-3 border-[#0E6655] border-t-transparent rounded-full animate-spin"></div>
+          <div>
+            <h3 className="font-bold text-slate-800 text-sm">Babyscan Clinic</h3>
+            <p className="text-[11px] text-slate-400 font-medium mt-0.5">Verifying Doctor Session...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Login Gate (Full Screen Login Wall if not authenticated) ──
+  if (!currentUserEmail) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex flex-col justify-between antialiased">
+        <header className="bg-white border-b border-slate-200 py-3.5 px-6 shadow-xs">
+          <div className="max-w-md mx-auto flex items-center justify-center gap-2.5">
+            <div className="bg-[#0E6655] text-white p-2 rounded-xl">
+              <Sparkles className="w-5 h-5 text-teal-200" />
+            </div>
+            <div>
+              <h1 className="text-lg font-bold text-slate-900 tracking-tight leading-none">Baby Scan Clinic</h1>
+              <p className="text-[10px] text-slate-500 font-semibold tracking-wide uppercase mt-1">Doctor Portal</p>
+            </div>
+          </div>
+        </header>
+
+        <main className="flex-grow flex items-center justify-center p-4 py-10">
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-xl w-full max-w-sm overflow-hidden animate-in fade-in duration-300">
+            <div className="bg-[#0E6655] text-white p-6 text-center">
+              <div className="w-12 h-12 bg-white/10 rounded-2xl flex items-center justify-center mx-auto mb-3 backdrop-blur-xs">
+                <Lock className="w-6 h-6 text-teal-200" />
+              </div>
+              <h2 className="font-bold text-lg">Doctor Authentication</h2>
+              <p className="text-xs text-teal-100/90 mt-0.5">Sign in to access receipts &amp; billing</p>
+            </div>
+
+            <form onSubmit={handleGateLogin} className="p-6 space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                  Doctor Email
+                </label>
+                <input
+                  type="email"
+                  value={loginEmail}
+                  onChange={(e) => setLoginEmail(e.target.value)}
+                  placeholder="doctor@babyscan.in"
+                  required
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm text-slate-900 focus:ring-2 focus:ring-[#0E6655] focus:border-[#0E6655] outline-hidden transition"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                  Password
+                </label>
+                <input
+                  type="password"
+                  value={loginPassword}
+                  onChange={(e) => setLoginPassword(e.target.value)}
+                  placeholder="••••••••"
+                  required
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm text-slate-900 focus:ring-2 focus:ring-[#0E6655] focus:border-[#0E6655] outline-hidden transition"
+                />
+              </div>
+
+              {loginError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs font-semibold text-rose-700 text-center flex items-center justify-center gap-1.5">
+                  <XCircle className="w-4 h-4 text-rose-600 flex-shrink-0" />
+                  <span>{loginError}</span>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={isLoggingIn}
+                className="w-full py-3 bg-[#0E6655] hover:bg-teal-800 text-white rounded-xl text-sm font-bold shadow-md transition active:scale-98 disabled:opacity-50 flex items-center justify-center gap-2 cursor-pointer"
+              >
+                {isLoggingIn ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    <span>Signing in...</span>
+                  </>
+                ) : (
+                  <>
+                    <Lock className="w-4 h-4" />
+                    <span>Sign In to Portal</span>
+                  </>
+                )}
+              </button>
+            </form>
+          </div>
+        </main>
+
+        <footer className="py-4 text-center text-xs text-slate-400 font-medium">
+          Babyscan Fetal Medicine &amp; Gynec Imaging &bull; Authorized Access Only
+        </footer>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 text-slate-800 antialiased">
       {/* ── Top Header ────────────────────────────────────────────────── */}
@@ -781,23 +941,25 @@ export function ReceiptGeneratorApp() {
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Settings & Admin Login Button */}
+          {/* Settings / Doctor Status */}
           <button
             onClick={() => setIsSettingsOpen(true)}
             className="flex items-center gap-1.5 bg-teal-800 hover:bg-teal-900 text-white text-xs font-bold px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-xl shadow-xs transition border border-teal-600/50"
-            title="Admin Login & Settings"
+            title="Settings"
           >
-            <Settings className="w-4 h-4 text-teal-200" />
-            {currentUserEmail ? (
-              <span className="flex items-center gap-1">
-                <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-                <span className="hidden md:inline max-w-[120px] truncate">{currentUserEmail}</span>
-              </span>
-            ) : (
-              <span className="flex items-center gap-1 text-amber-300">
-                <Lock className="w-3.5 h-3.5" /> Login ⚙️
-              </span>
-            )}
+            <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+            <span className="hidden md:inline max-w-[140px] truncate">{currentUserEmail}</span>
+            <Settings className="w-3.5 h-3.5 text-teal-200" />
+          </button>
+
+          {/* Direct Sign Out Button */}
+          <button
+            onClick={handleSignOut}
+            className="flex items-center gap-1.5 bg-rose-700/80 hover:bg-rose-700 text-white text-xs font-bold px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-xl shadow-xs transition active:scale-95 border border-rose-600/50"
+            title="Sign Out"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Sign Out</span>
           </button>
 
           <button
